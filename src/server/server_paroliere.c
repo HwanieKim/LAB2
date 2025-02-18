@@ -20,7 +20,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <errno.h>
-#include <stdarg.h> // per log_event
+#include <stdarg.h> // per log_event e safe_ptrintf
 #include <ctype.h>
 
 // definizioni protocollo
@@ -190,8 +190,20 @@ bool ranking_sent = false;
 pthread_mutex_t ranking_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t ranking_cond = PTHREAD_COND_INITIALIZER;
 
-// ======================= Funzioni di comunicazione =======================
+// Definizione e inizializzazione di un mutex globale per l'output della console
+pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// ======================= Funzioni di comunicazione =======================
+void safe_printf(const char *format, ...)
+{
+    va_list args;
+    pthread_mutex_lock(&console_mutex);
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    pthread_mutex_unlock(&console_mutex);
+
+}
 /*
     send_mesage:
     invia un messaggio al client secondo il protocollo:
@@ -475,7 +487,7 @@ static void *orchestrator_thread(void *arg)
         pthread_mutex_unlock(&g_server.clients_mutex);
 
         log_event("[ORCHESTRATOR] Nuova partiata iniziata, durata %d secondi", g_server.game_duration);
-        printf("[ORCHESTRATOR] Nuova partita iniziata, durata %d secondi\n", g_server.game_duration);
+        safe_printf("[ORCHESTRATOR] Nuova partita iniziata, durata %d secondi\n", g_server.game_duration);
 
         // attesa durante la partita
         time_t game_start = g_server.game_start_time;
@@ -554,7 +566,7 @@ static void *orchestrator_thread(void *arg)
         g_server.break_start_time = time(NULL);
 
         // pausa tra partite
-        printf("[ORCHESTRATOR] Partita terminata, pausa tra partite di %d secondi\n", g_server.break_time);
+        safe_printf("[ORCHESTRATOR] Partita terminata, pausa tra partite di %d secondi\n", g_server.break_time);
         log_event("[ORCHESTRATOR] Inizio pausa di %d secondi", g_server.break_time);
 
         while (!g_server.stop && difftime(time(NULL), g_server.break_start_time) < g_server.break_time)
@@ -667,7 +679,7 @@ void *scorer_thread(void *arg)
         pthread_mutex_unlock(&g_server.clients_mutex);
 
         log_event("[SCORER] Parita terminata, classifica finale: \n%s", classifica);
-        printf("Partita termintata, classifica:\n%s\n", classifica);
+        safe_printf("Partita termintata, classifica:\n%s\n", classifica);
 
         // Segnala che la classifica è stata inviata
         pthread_mutex_lock(&ranking_mutex);
@@ -779,7 +791,7 @@ static void *client_thread(void *arg)
 
         if (type == MSG_SERVER_SHUTDOWN)
         {
-            printf("\n[SERVER] Shutdown: %s\n", data);
+            safe_printf("\n[SERVER] Shutdown: %s\n", data);
             break;
         }
 
@@ -790,7 +802,7 @@ static void *client_thread(void *arg)
         {
             pthread_mutex_lock(&g_server.registered_mutex);
             pthread_mutex_lock(&g_server.clients_mutex);
-            printf("[SERVER] Ricevuto messaggio di registrazione per l'utente: %s\n", data);
+            safe_printf("[SERVER] Ricevuto messaggio di registrazione per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuta registrazione: %s", data);
 
             // verifica nome utente
@@ -876,7 +888,7 @@ static void *client_thread(void *arg)
 
         case MSG_LOGIN_UTENTE:
         {
-            printf("[SERVER] Ricevuto messaggio di login per l'utente: %s\n", data);
+            safe_printf("[SERVER] Ricevuto messaggio di login per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuto login: %s", data);
             // Controlla se il client è già autenticato
             if (strlen(g_server.clients[idx].username) > 0)
@@ -940,7 +952,7 @@ static void *client_thread(void *arg)
 
         case MSG_CANCELLA_UTENTE:
         {
-            printf("[SERVER] Ricevuto comando di cancellazione per l'utente: %s\n", data);
+            safe_printf("[SERVER] Ricevuto comando di cancellazione per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuta cancellazione registrazione: %s", data);
             pthread_mutex_lock(&g_server.registered_mutex);
 
@@ -974,7 +986,7 @@ static void *client_thread(void *arg)
 
         case MSG_PAROLA:
         {
-            printf("[SERVER] Ricevuto comando per parola: %s\n", data);
+            safe_printf("[SERVER] Ricevuto comando per parola: %s\n", data);
             log_event("[CLIENT] Ricevuta parola: %s", data);
             if (!g_server.dictionary)
             {
@@ -1049,7 +1061,7 @@ static void *client_thread(void *arg)
 
         case MSG_MATRICE:
         {
-            printf("[SERVER] Ricevuto comando per matrice\n");
+            safe_printf("[SERVER] Ricevuto comando per matrice\n");
             log_event("[CLIENT] Ricevuto comando matrice");
 
             pthread_mutex_lock(&g_server.clients_mutex);
@@ -1097,7 +1109,7 @@ static void *client_thread(void *arg)
 
         case MSG_POST_BACHECA:
         {
-            printf("[SERVER] Ricevuto comando per post bacheca\n");
+            safe_printf("[SERVER] Ricevuto comando per post bacheca\n");
             log_event("[CLIENT] Ricevuto comando post bacheca");
             // client invia un messaggio da postare sulla bacheca
             pthread_mutex_lock(&bacheca_mutex);
@@ -1122,7 +1134,7 @@ static void *client_thread(void *arg)
 
         case MSG_SHOW_BACHECA:
         {
-            printf("[SERVER] Ricevuto comando per show bacheca\n");
+            safe_printf("[SERVER] Ricevuto comando per show bacheca\n");
             log_event("[CLIENT] Ricevuto comando show bacheca");
             // invia al client il contenuto attuale della bachca
             pthread_mutex_lock(&bacheca_mutex);
@@ -1146,7 +1158,7 @@ static void *client_thread(void *arg)
 
         case MSG_PUNTI_FINALI:
         {
-            printf("Classifica ricevuta per il client %s: %s\n", g_server.clients[idx].username, data);
+            safe_printf("Classifica ricevuta per il client %s: %s\n", g_server.clients[idx].username, data);
             log_event("[CLIENT] Classifica ricetua per  %s: %s", g_server.clients[idx].username, data);
             break;
         }
@@ -1294,7 +1306,7 @@ int server_init(
         return -1;
     }
 
-    printf("[SERVER] In ascolto sulla porta %d \n", port);
+    safe_printf("[SERVER] In ascolto sulla porta %d \n", port);
     log_event("[SYSTEM] Server in ascolto sulla porta %d", port);
     return 0;
 }
@@ -1347,7 +1359,7 @@ int server_run()
             continue;
         }
         log_event("[ACCEPT] Nuova connessione accettata");
-        printf("[SERVER] nuovo client connesso \n");
+        safe_printf("[SERVER] nuovo client connesso \n");
 
         char welcome[256];
         snprintf(welcome, sizeof(welcome), "Benvenuto sul server %s", g_server.server_name);
@@ -1397,7 +1409,7 @@ int server_run()
         }
     }
 
-    printf("[SERVER] Uscita dal loop di accept \n");
+    safe_printf("[SERVER] Uscita dal loop di accept \n");
     log_event("[SYSTEM] Server: uscita dal loop di accept");
     return 0;
 }
@@ -1423,7 +1435,7 @@ void server_shutdown()
     shutdown_in_progress = true;
 
     g_server.stop = true;
-    printf("[SERVER] avvio shutdown... \n");
+    safe_printf("[SERVER] avvio shutdown... \n");
     log_event("[SYSTEM] Avvio shutdown");
 
     // Risveglia tutti i thread bloccati sui condition variable:
@@ -1465,7 +1477,7 @@ void server_shutdown()
     pthread_join(g_server.scorer_thread_id, NULL);
     log_event("[SYSTEM] Thread scorer terminato");
 
-    printf("[SERVER] Shutdown completato.\n");
+    safe_printf("[SERVER] Shutdown completato.\n");
     log_event("[SYSTEM] Shutdown completato");
 
     pthread_mutex_destroy(&g_server.clients_mutex);
