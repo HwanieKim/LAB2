@@ -131,6 +131,7 @@ void trie_free(trie_node *node)
 
 void *load_dictionary_trie(const char *filename)
 {
+
     FILE *fp = fopen(filename, "r");
     if (!fp)
     {

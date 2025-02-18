@@ -192,8 +192,6 @@ pthread_cond_t ranking_cond = PTHREAD_COND_INITIALIZER;
 
 // Definizione e inizializzazione di un mutex globale per l'output della console
 pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-// ======================= Funzioni di comunicazione =======================
 void safe_printf(const char *format, ...)
 {
     va_list args;
@@ -202,8 +200,9 @@ void safe_printf(const char *format, ...)
     vprintf(format, args);
     va_end(args);
     pthread_mutex_unlock(&console_mutex);
-
 }
+
+// ======================= Funzioni di comunicazione =======================
 /*
     send_mesage:
     invia un messaggio al client secondo il protocollo:
@@ -212,6 +211,7 @@ void safe_printf(const char *format, ...)
 
 static int send_message(int sockfd, char type, const char *data, unsigned int length)
 {
+    // conversione in network length
     unsigned int netlen = htonl(length);
     if (write(sockfd, &type, 1) != 1)
     {
@@ -256,6 +256,7 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
         return -1;
     }
 
+    // conversione da network length
     unsigned int msglen = ntohl(netlen);
     *length = msglen;
 
@@ -1100,7 +1101,7 @@ static void *client_thread(void *arg)
 
                 // Costruisce una stringa CSV: primo campo il tempo di default, secondo il tempo rimanente
                 char csv_str[64];
-                snprintf(csv_str, sizeof(csv_str), "%d secondi, e l'inizio della nuova partita tra %d", g_server.break_time, remaining_break);
+                snprintf(csv_str, sizeof(csv_str), "pausa di %d secondi, e l'inizio della nuova partita tra %d", g_server.break_time, remaining_break);
                 send_message(sockfd, MSG_MATRICE, csv_str, strlen(csv_str) + 1);
             }
         }
@@ -1211,6 +1212,7 @@ int server_init(
     int disconnect_timeout_sec)
 {
     signal(SIGPIPE, SIG_IGN);
+
     // costruttore
     memset(&g_server, 0, sizeof(g_server));
     g_server.port = port;
@@ -1227,8 +1229,24 @@ int server_init(
     // impostazione timeout per la disconnessione di client inattivi
     g_server.disconnect_timeout = disconnect_timeout_sec;
 
+    // apertura file di log in modalita' append
+    g_server.log_fp = fopen("paroliere.log", "a");
+    if (g_server.log_fp == NULL)
+    {
+        perror("fopen log");
+    }
+    else
+    {
+        log_event("[SYSTEM] File di log aperto");
+    }
+    log_event("test");
     // caricamento il dizionario nel trie
+    if (dict_file != NULL)
+    {
+        dict_file = "resources/dictionary.txt";
+    }
     g_server.dictionary = load_dictionary_trie(dict_file);
+
     if (!g_server.dictionary)
     {
         fprintf(stderr, "ERROR: impossibile caricare il dizionario da %s. \n", dict_file);
@@ -1263,17 +1281,6 @@ int server_init(
     if (g_server.matrix_fp)
     {
         rewind(g_server.matrix_fp);
-    }
-
-    // apertura file di log in modalita' append
-    g_server.log_fp = fopen("paroliere.log", "a");
-    if (g_server.log_fp == NULL)
-    {
-        perror("fopen log");
-    }
-    else
-    {
-        log_event("[SYSTEM] File di log aperto");
     }
 
     // creazione del socket in ascolto

@@ -47,7 +47,7 @@ int main(int argc, char *argv[])
 
     char *endptr;
     long port = strtol(argv[2], &endptr, 10);
-    if (*endptr != '\0' || port < 1024 || port > 65535)
+    if (*endptr != '\0' || port < 1025 || port > 65535)
     {
         fprintf(stderr, "Porta non valida: %s. Usa un valore tra 1024 e 65535.\n", argv[2]);
         exit(EXIT_FAILURE);
@@ -81,6 +81,11 @@ int main(int argc, char *argv[])
             break;
         case 'd':
             durata_min = atoi(optarg);
+            if (durata_min <= 0)
+            {
+                fprintf(stderr, "[ERROR] Valore della durata deve essere maggiore di 0\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 's':
             seed = atoi(optarg);
@@ -90,6 +95,11 @@ int main(int argc, char *argv[])
             break;
         case 't':
             disconnect_min = atoi(optarg);
+            if (disconnect_min <= 0)
+            {
+                fprintf(stderr, "[ERROR] Valore di timeout di disconnessione deve essere maggiore di 0\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         default:
             fprintf(stderr, "Uso corretto: %s <nome_server> <porta> [--matrici file] [--durata minuti] [--seed rnd_seed] [--diz dizionario] [--disconnetti-dopo minuti]\n",

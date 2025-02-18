@@ -71,7 +71,7 @@ static int tokenize_word(const char *word, char tokens[][3])
             {
                 strcpy(tokens[tcount], "QU");
                 tcount++;
-                i += 2;
+                i += 2; // salta u
                 continue;
             }
         }
@@ -121,7 +121,7 @@ static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, i
     {
         int rr = row + dr[i];
         int cc = col + dc[i];
-        if (rr < 0 || rr >= 4 || cc < 0 || cc >= 4)
+        if (rr < 0 || rr >= 4 || cc < 0 || cc >= 4) // esclude fuori dalla matrice
             continue;
         int new_index = rr * 4 + cc;
         if (!visted[new_index])
@@ -166,7 +166,7 @@ bool is_word_in_matrix(char matrix[16][5], const char *word)
         }
         if (dfs_find(matrix, tokens, 0, tcount, i, visted))
         {
-            return true;
+            return true; // parola trovata
         }
     }
     return false;
