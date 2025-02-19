@@ -118,6 +118,7 @@ typedef struct
     int score;
 } ScoreMsg;
 
+// coda dei punteggi: conterra' i punteggi finali inviati dai client
 typedef struct
 {
     ScoreMsg messages[MAX_SCORE_MSG];
@@ -129,7 +130,7 @@ typedef struct
 typedef struct
 {
     int port;
-    int server_sockfd;
+    int server_sockfd; // socket di ascolto per nuove connesioni
     client_info clients[MAX_CLIENTS];
     pthread_mutex_t clients_mutex;
 
@@ -151,7 +152,7 @@ typedef struct
 
     // thread orchestratore per cicolo partita/pausa
     pthread_t orchestrator_thread_id;
-    // trhead scorer
+    // trhead scorer per gestione classifica
     pthread_t scorer_thread_id;
 
     int disconnect_timeout; // timeout per inattivita' del client (sec)
@@ -160,7 +161,7 @@ typedef struct
     char *matrix_filename;
     FILE *matrix_fp;
 
-    // log file and mutex
+    // log file e mutex dedicato
     FILE *log_fp;
     pthread_mutex_t log_mutex;
 
@@ -192,6 +193,11 @@ pthread_cond_t ranking_cond = PTHREAD_COND_INITIALIZER;
 
 // Definizione e inizializzazione di un mutex globale per l'output della console
 pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+    safe_printf:
+        funzione thread-safe per scrivere su console, sincronizzazione dell'accesso tramite mutex dedicato
+*/
 void safe_printf(const char *format, ...)
 {
     va_list args;
@@ -207,6 +213,7 @@ void safe_printf(const char *format, ...)
     send_mesage:
     invia un messaggio al client secondo il protocollo:
         [1 byte type] [4 bytre lunghezza (network order)] [data]
+    restituisce 0 in caso di successo, -1 per erroree
 */
 
 static int send_message(int sockfd, char type, const char *data, unsigned int length)
@@ -233,9 +240,11 @@ static int send_message(int sockfd, char type, const char *data, unsigned int le
 }
 
 /*
-    receive_message:s
-    riceve un messaggio, se il socket ha un timeout impostato(per inattivita' del client), un erroro (errno == EAGAIN/EWOULDBLOCK)
-    permettera' di rilevare il client inattivo
+    receive_message:
+    riceve un messaggio dal client:
+        [1 byte type] [4 byte lunghezza (network order)] [data]
+    popola i parametri in output cone le informazioni ricevute.
+    ritorna 0 in caso di successo e -1 in caso di fine connessione/errore
 */
 static int receive_message(int sockfd, char *type, char *data, unsigned int *length)
 {
@@ -267,7 +276,7 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
         {
             return -1;
         }
-        data[n] = '\0'; // Aggiungi il carattere di terminazione null
+        data[n] = '\0'; // Aggiungi il carattere di terminazione
     }
     else
     {
@@ -281,7 +290,7 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
 /*
     log_event:
         registra un evento sul file di log con timestamp
-        funzione con mutex per garantire l'accesso esclusivo al file di log
+        utilizza con mutex per garantire l'accesso esclusivo al file di log
 */
 static void log_event(const char *format, ...)
 {
@@ -289,13 +298,14 @@ static void log_event(const char *format, ...)
         return;
 
     pthread_mutex_lock(&g_server.log_mutex);
+
     // timestamp
     time_t now = time(NULL);
     char timestr[64];
     strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S", localtime(&now));
     fprintf(g_server.log_fp, "[%s] [%s] ", timestr, g_server.server_name);
 
-    // log
+    // messaggio di log
     va_list args;
     va_start(args, format);
     vfprintf(g_server.log_fp, format, args);
@@ -311,8 +321,9 @@ static void log_event(const char *format, ...)
 // ======================= lettura matrice da file =======================
 /*
     read_matrix_from_file:
-        se e' specificato un file di matrici, legge una riga e ne estrae 16 token (celle), separati da spazi o tab.ADJ_FREQUENCY
+        se e' specificato un file di matrici, legge una riga e ne estrae 16 token (celle), separati da spazi o tab.
         se si raggiunge la fine del fine, il puntatore viene fatto rewind per ciclare le matrici
+        ritorna ture se la lettura ha avuto successo, false altrimenti
 */
 
 static bool read_matrix_from_file(char matrix[16][5])
@@ -374,6 +385,10 @@ static void signal_handler(int signo)
     server_shutdown();
 }
 
+/*
+    sigalarm_handler:
+        handler vuoto per SIGALRM, viene usato solo per interrompere temporaneamente la read bloccante nel client_thread
+*/
 void sigalarm_handler(int signo)
 {
     // per evitare waring
@@ -385,6 +400,7 @@ void sigalarm_handler(int signo)
 /*
     broadcast_server_shutdown:
         invia a tutti i client connessi un messaggio di shutdown
+        chiudendo forzamente le connessioni
 */
 static void broadcast_server_shutdown()
 {
@@ -408,13 +424,16 @@ static void broadcast_server_shutdown()
     }
     pthread_mutex_unlock(&g_server.clients_mutex);
 }
+
 // ======================= push_score =======================
 /*
     push_score:
     Aggiunge il punteggio di un utente alla coda dei punteggi se l'username non è vuoto.
+    viene chiamata quando la partita termina o quando il client invia manualmente il proprio score (se non l'ha gia' fatto)
 */
 void push_score(const char *username, int score)
 {
+    // controlla nome utente
     if (username[0] == '\0')
         return;
     pthread_mutex_lock(&score_queue_mutex);
@@ -426,6 +445,7 @@ void push_score(const char *username, int score)
         g_score_queue.count++;
         log_event("[SYSTEM] Punteggio push: %s -> %d (count=%d)", username, score, g_score_queue.count);
     }
+    // segnala a eventuali tread in attesa che un nuovo punteggio e' disonibile
     pthread_cond_signal(&score_queue_cond);
     pthread_mutex_unlock(&score_queue_mutex);
 }
@@ -434,22 +454,30 @@ void push_score(const char *username, int score)
 // thread per gestione client, orchestratore
 /*
     orchestrator_thread:
-        gestisce il ciclo partita/pausa
-        - all'inizio di ogni partita, imposta game_running, registra l'orario, rigenera la matrice(o legge dal file se specificato),
-        e azzera i punteggi e le parole usate dai client
-        - dopo la durata della partita, invia i punteggi finali a tutti i client connessi, logga l'evento
-        e attende per un periodio di pausa prima di iniziare una nuova partita
+        gestisce il ciclo di vita della partia
+        1) Imposta lo stato di gioco come attivo e genera (o legge) la matrice di gioco.
+        2) Azzera punteggi e parole usate per tutti i client connessi.
+        3) Attende la durata configurata per la partita.
+        4) Alla fine, forza l'invio dei punteggi e avvia la fase di pausa.
+        5) Ripete il ciclo finché il server non viene fermato.
 */
 static void *orchestrator_thread(void *arg)
 {
     (void)arg;
-    // Abilita la cancellazione
+
+    // Abilita la cancellazione (cancellation point)
+    // per permettere di "forzare" la terminazione del thread senza dover attendere che il thread stesso termini,
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+
+    // PTHREAD_CANCEL_DEFERRED permette che la cancellazione avvenga nei punti sicuri
     pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 
     while (!g_server.stop)
     {
+        // terminazione thread in modo sicuro e rapida
+        // controlla se e' stata richiesta la cancellazione (pthread_cancel), se si, termina in modo sicuro
         pthread_testcancel();
+
         // inizio partita
         pthread_mutex_lock(&g_server.clients_mutex);
         g_server.game_running = true;
@@ -457,7 +485,7 @@ static void *orchestrator_thread(void *arg)
         log_event("[ORCHESTRATOR] Inizio partita");
         pthread_mutex_unlock(&g_server.clients_mutex);
 
-        // se specificato, leggi matrice da file
+        // se specificato, leggi matrice da file, altrimenti generazione casuale
         if (g_server.matrix_fp)
         {
             rewind(g_server.matrix_fp); // assicura la lettura all'inizio
@@ -615,7 +643,7 @@ void *scorer_thread(void *arg)
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 1; // attesa massima di 1 secondo
 
-        // attesa finche count == expected
+        // attesa finche count < expected
         while (g_score_queue.count < g_score_queue.expected && !g_server.stop)
         {
             int ret = pthread_cond_timedwait(&score_queue_cond, &score_queue_mutex, &ts);
@@ -682,7 +710,7 @@ void *scorer_thread(void *arg)
         log_event("[SCORER] Parita terminata, classifica finale: \n%s", classifica);
         safe_printf("Partita termintata, classifica:\n%s\n", classifica);
 
-        // Segnala che la classifica è stata inviata
+        // Segnala all'orchestrator che la classifica è stata inviata
         pthread_mutex_lock(&ranking_mutex);
         ranking_sent = true;
         pthread_cond_signal(&ranking_cond);
@@ -724,8 +752,11 @@ static void *client_thread(void *arg)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigalarm_handler;
+
+    // reset di sig
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
+
     sigaction(SIGALRM, &sa, NULL);
 
     // impostazione timeout di ricezione sul socket, gestione client inattivi
@@ -746,8 +777,8 @@ static void *client_thread(void *arg)
         pthread_testcancel();
         pthread_mutex_lock(&g_server.clients_mutex);
         bool game_active = g_server.game_running;
-
         pthread_mutex_unlock(&g_server.clients_mutex);
+
         // se il gioco terminato e il punteggio non e' stato inviato, invialo alla coda
         if (!game_active && !g_server.clients[idx].score_sent)
         {
@@ -756,7 +787,7 @@ static void *client_thread(void *arg)
             log_event("[CLIENT] Client %s: punteggio inviato alla coda", g_server.clients[idx].username);
         }
 
-        // controllo periodico
+        // controllo periodico per inattivita'
         if (difftime(time(NULL), last_activity) > g_server.disconnect_timeout)
         {
             log_event("[CLIENT] Disconnessione per inattivita': %s", g_server.clients[idx].username);
@@ -764,6 +795,7 @@ static void *client_thread(void *arg)
             break;
         }
 
+        // ricezione messaggiod dal client
         if (receive_message(sockfd, &type, data, &length) < 0)
         {
             if (errno == EINTR)
@@ -772,7 +804,7 @@ static void *client_thread(void *arg)
                 pthread_testcancel();
                 continue;
             }
-            // se il client non comunica per un certo periodo, rivcervera' timeout (errno == EAGAIN/EWOULDBLOCK)
+            // controlla timeout di inattività (EAGAIN/EWOULDBLOCK), read su socket scaduta per timeout
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 send_message(sockfd, MSG_SERVER_SHUTDOWN, "Disconnessione per inattivita'", 30);
@@ -790,7 +822,7 @@ static void *client_thread(void *arg)
             last_activity = time(NULL);
         }
 
-        if (type == MSG_SERVER_SHUTDOWN)
+        // gestione di messaggi di tipo MSG_SERVER_SHUTDOWN inviati esplicitamente dal client if (type == MSG_SERVER_SHUTDOWN)
         {
             safe_printf("\n[SERVER] Shutdown: %s\n", data);
             break;
@@ -847,7 +879,7 @@ static void *client_thread(void *arg)
                 }
                 else
                 {
-                    // Riattiva l'utente solo se non è connesso
+                    // Riattiva l'utente solo se non è connesso altrove
                     if (already_connected)
                     {
                         send_message(sockfd, MSG_ERR, "Nome utente già in uso", 24);
@@ -873,8 +905,7 @@ static void *client_thread(void *arg)
                 }
                 else
                 {
-                    strncpy(g_server.registered_users[g_server.registered_count].username,
-                            data, USERNAME_LEN - 1);
+                    strncpy(g_server.registered_users[g_server.registered_count].username, data, USERNAME_LEN - 1);
                     g_server.registered_users[g_server.registered_count].deleted = false;
                     g_server.registered_count++;
                     send_message(sockfd, MSG_OK, "Registrazione completata", 25);
@@ -891,6 +922,7 @@ static void *client_thread(void *arg)
         {
             safe_printf("[SERVER] Ricevuto messaggio di login per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuto login: %s", data);
+
             // Controlla se il client è già autenticato
             if (strlen(g_server.clients[idx].username) > 0)
             {
@@ -1015,14 +1047,17 @@ static void *client_thread(void *arg)
                 send_message(sockfd, MSG_ERR, "Parola non presente in dizionario", strlen("Parola non presente in dizionario") + 1);
                 break;
             }
+
             // 2) controllo presenza nella matrice
             if (!is_word_in_matrix(g_server.matrix, data))
             {
                 send_message(sockfd, MSG_ERR, "Parola non presente in matrice", strlen("Parola non presente in matrice"));
                 break;
             }
+
             // 3) calcolo punteggio (numero di lettere "logiche", con Qu = 1)
             int points = count_letters(data);
+
             // 4) verifica se e' ripetuta
             pthread_mutex_lock(&g_server.clients_mutex);
             bool repeated = false;
@@ -1112,12 +1147,14 @@ static void *client_thread(void *arg)
         {
             safe_printf("[SERVER] Ricevuto comando per post bacheca\n");
             log_event("[CLIENT] Ricevuto comando post bacheca");
+
             // client invia un messaggio da postare sulla bacheca
             pthread_mutex_lock(&bacheca_mutex);
             BachecaMsg nuovo;
             strncpy(nuovo.username, g_server.clients[idx].username, USERNAME_LEN - 1);
             strncpy(nuovo.message, data, 127);
 
+            // implementazione di una coda circolare
             if (bacheca.count < MAX_BACHECA_MSG)
             {
                 bacheca.messages[(bacheca.front + bacheca.count) % MAX_BACHECA_MSG] = nuovo;
@@ -1137,12 +1174,14 @@ static void *client_thread(void *arg)
         {
             safe_printf("[SERVER] Ricevuto comando per show bacheca\n");
             log_event("[CLIENT] Ricevuto comando show bacheca");
+
             // invia al client il contenuto attuale della bachca
             pthread_mutex_lock(&bacheca_mutex);
             char csv_buffer[2048] = {0};
             for (int i = 0; i < bacheca.count; i++)
             {
                 int pos = (bacheca.front + i) % MAX_BACHECA_MSG;
+
                 // alterna nome e messaggio
                 strcat(csv_buffer, bacheca.messages[pos].username);
                 strcat(csv_buffer, ",");
@@ -1159,6 +1198,7 @@ static void *client_thread(void *arg)
 
         case MSG_PUNTI_FINALI:
         {
+            // il client ha ricevuto la classifica
             safe_printf("Classifica ricevuta per il client %s: %s\n", g_server.clients[idx].username, data);
             log_event("[CLIENT] Classifica ricetua per  %s: %s", g_server.clients[idx].username, data);
             break;
@@ -1178,6 +1218,7 @@ static void *client_thread(void *arg)
         g_server.clients[idx].score_sent = true;
         log_event("[CLIENT] Punteggio finale inviato per %s", g_server.clients[idx].username);
     }
+
     // chiusura socket, aggiornamento dello stato del client
     close(sockfd);
     pthread_mutex_lock(&g_server.clients_mutex);
@@ -1211,9 +1252,10 @@ int server_init(
     int seed,
     int disconnect_timeout_sec)
 {
+    // Ignora SIGPIPE per evitare crash quando i client chiudono inaspettatamente
     signal(SIGPIPE, SIG_IGN);
 
-    // costruttore
+    // inizializzazione parametri
     memset(&g_server, 0, sizeof(g_server));
     g_server.port = port;
     g_server.game_duration = game_duration_sec;
@@ -1222,11 +1264,12 @@ int server_init(
     g_server.game_running = false;
     g_server.seed = seed;
 
+    // inizializzazione mutex
     pthread_mutex_init(&g_server.clients_mutex, NULL);
     pthread_mutex_init(&g_server.registered_mutex, NULL);
     pthread_mutex_init(&g_server.log_mutex, NULL);
 
-    // impostazione timeout per la disconnessione di client inattivi
+    // impostazione timeout di disconnessione per inattivita'
     g_server.disconnect_timeout = disconnect_timeout_sec;
 
     // apertura file di log in modalita' append
@@ -1240,9 +1283,11 @@ int server_init(
         log_event("[SYSTEM] File di log aperto");
     }
     log_event("test");
+
     // caricamento il dizionario nel trie
-    if (dict_file != NULL)
+    if (dict_file == NULL)
     {
+        // default se non specificato file per dizionario
         dict_file = "resources/dictionary.txt";
     }
     g_server.dictionary = load_dictionary_trie(dict_file);
@@ -1250,7 +1295,7 @@ int server_init(
     if (!g_server.dictionary)
     {
         fprintf(stderr, "ERROR: impossibile caricare il dizionario da %s. \n", dict_file);
-        exit(EXIT_FAILURE);
+        exit(EXIT_FAILURE); // termina il server
     }
 
     log_event("[SYSTEM] Dizionario caricato da %s", dict_file);
@@ -1291,6 +1336,7 @@ int server_init(
         return -1;
     }
 
+    // abilita il riuso dell'indirizzo
     int opt_value = 1;
     setsockopt(g_server.server_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt_value, sizeof(opt_value));
 
@@ -1342,6 +1388,7 @@ int server_run()
     }
     log_event("[SYSTEM] Thread orchestrator avviato");
 
+    // avvio thread scorer
     if (pthread_create(&g_server.scorer_thread_id, NULL, scorer_thread, NULL) != 0)
     {
         perror("pthread_create scorer");
@@ -1397,7 +1444,7 @@ int server_run()
         g_server.clients[idx].username[0] = '\0';
         pthread_mutex_unlock(&g_server.clients_mutex);
 
-        // creazione thread per gestire il client, passando l'indice come argomento
+        // creazione thread per gestire il nuovo client
         int *arg = malloc(sizeof(int));
         *arg = idx;
         if (pthread_create(&g_server.clients[idx].thread_id, NULL, client_thread, arg) != 0)
@@ -1456,11 +1503,14 @@ void server_shutdown()
     close(g_server.server_sockfd);
     log_event("[SYSTEM] Socket in ascolto chiuso");
 
-    // cancella e unisci il thread orchestrator
+    // cancella e unisci il thread orchestrator, cancel e join per evitare creazione thread zombie
+    // forza l'uscita (cancel)
     pthread_cancel(g_server.orchestrator_thread_id);
+    // attesa  terminazione effettiva (join)
     pthread_join(g_server.orchestrator_thread_id, NULL);
     log_event("[SYSTEM] Thread orchestrator terminato");
 
+    // libera il dizionario
     if (g_server.dictionary)
     {
         trie_free((trie_node *)g_server.dictionary);
@@ -1487,6 +1537,7 @@ void server_shutdown()
     safe_printf("[SERVER] Shutdown completato.\n");
     log_event("[SYSTEM] Shutdown completato");
 
+    // distrugge i mutex e i condition variables
     pthread_mutex_destroy(&g_server.clients_mutex);
     pthread_mutex_destroy(&g_server.log_mutex);
     pthread_mutex_destroy(&g_server.registered_mutex);
@@ -1507,7 +1558,10 @@ void server_shutdown()
     if (g_server.matrix_filename)
         free(g_server.matrix_filename);
 }
-
+/*
+   server_set_name:
+   Imposta il nome del server. Viene utilizzato per i messaggi di log.
+*/
 void server_set_name(const char *name)
 {
     // copia il nome del server nella struttura globale

@@ -43,6 +43,7 @@ trie_node *trie_create_node(void)
 }
 
 // ======================= inserzione parola nel trie =======================
+
 void trie_insert(trie_node *root, const char *word)
 {
     trie_node *curr = root;
@@ -54,19 +55,21 @@ void trie_insert(trie_node *root, const char *word)
         {
             if (word[i + 1] == '\0' || tolower(word[i + 1]) != 'u')
             {
+                // se c'e' una 'q' non seguita da 'u', ignoriamo
                 continue;
             }
-            // qu come unico token, indice 26
 
+            // qu come unico token, indice 26
             int index = 26;
             if (!curr->children[index])
             {
                 curr->children[index] = trie_create_node();
             }
             curr = curr->children[index];
-            i++; // salta u
+            i++; // salta 'u'
             continue;
         }
+        // ignora caratteri non alfabetici
         if (c < 'a' || c > 'z')
             continue;
 
@@ -99,7 +102,7 @@ bool trie_search(trie_node *root, const char *word)
             if (!curr->children[index])
                 return false;
             curr = curr->children[index];
-            i++;
+            i++; // salta 'u'
             continue;
         }
         if (c < 'a' || c > 'z')
@@ -109,9 +112,12 @@ bool trie_search(trie_node *root, const char *word)
             return false;
         curr = curr->children[index];
     }
+    // se la posizione e' valida ed end_of_word == true, allora esiste
     return (curr && curr->end_of_word);
 }
 
+// trie_free
+// dealloca ricorsivamente
 void trie_free(trie_node *node)
 {
     if (!node)
@@ -142,11 +148,13 @@ void *load_dictionary_trie(const char *filename)
     char buffer[256];
     while (fgets(buffer, sizeof(buffer), fp))
     {
+        // rimuove eventuale newline
         char *p = strchr(buffer, '\n');
         if (p)
         {
             *p = '\0';
         }
+        // se la riga e' vuota
         if (strlen(buffer) == 0)
         {
             continue;

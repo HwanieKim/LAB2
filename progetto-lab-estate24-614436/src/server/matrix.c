@@ -18,9 +18,12 @@ static const char *LETTERS[] = {
 
 static int LETTERS_COUNT = 21;
 
-// genera una matrice 4x4 di lettere casuali, riempie un array lineare di 16 celle, ognuna fino a 4 char
-// generazione randomica di lettere conla funzione rand() e modulo 21
+/*
+    generate_matrix:
+        genera una matrice 4x4 di lettere casuali, riempie un array lineare di 16 celle, ognuna fino a 4 char
+        generazione randomica di lettere conla funzione rand() e modulo LETTERS_COUNT
 
+*/
 void generate_matrix(char matrix[16][5], unsigned int seed)
 {
     srand(seed); // Usa il seed passato dal server
@@ -28,13 +31,15 @@ void generate_matrix(char matrix[16][5], unsigned int seed)
     {
         int idx = rand() % LETTERS_COUNT;
         strncpy(matrix[i], LETTERS[idx], 4);
-        matrix[i][4] = '\0';
+        matrix[i][4] = '\0'; // terminazione di sicurezza
     }
 }
 
-// conta caratteri logici di una parola, qu considerato come 1
-// EX) "ciao" -> 4, "ciaoqu" -> 5
-
+/*
+    count_letters:
+        conta caratteri logici di una parola, qu considerato come 1
+        EX) "ciao" -> 4, "ciaoqu" -> 5
+*/
 int count_letters(const char *word)
 {
     int count = 0;
@@ -55,8 +60,13 @@ int count_letters(const char *word)
     }
     return count;
 }
+/*
+    tokenize_word:
+        convertire la parola in un array di token, dove 'qu' viene trattato come unico token
+        tokens[pos] e' al massimo 2 caratteri piu' il terminatore
+        restituisce il numero di token estratti
 
-// convertire la parola in un array di token, facilita la ricerca nel dizionario
+*/
 static int tokenize_word(const char *word, char tokens[][3])
 {
     int tcount = 0;
@@ -64,6 +74,7 @@ static int tokenize_word(const char *word, char tokens[][3])
     while (word[i])
     {
         char c = (char)toupper((unsigned char)word[i]);
+        // Se c='Q' e c2='U', gestiamo "QU" come un unico token
         if (c == 'Q')
         {
             char c2 = (char)toupper((unsigned char)word[i + 1]);
@@ -75,6 +86,7 @@ static int tokenize_word(const char *word, char tokens[][3])
                 continue;
             }
         }
+        // altrimenti (c != 'q') prendiamo singolo carattere
         tokens[tcount][0] = c;
         tokens[tcount][1] = '\0';
         tcount++;
@@ -83,22 +95,29 @@ static int tokenize_word(const char *word, char tokens[][3])
     return tcount;
 }
 
-// dfs per cercare tokens[pos] in matrice 4x4, lineare row = r, col =c => r*4+c
-// matrix[i]  == una stringa come "a" o "qu" (forzato a upper case)
-// visted[], segna se l'indice i e' gia' usato
+/*
+    dfs_find:
+      Cerca ricorsivamente nella matrice, a partire dalla cella 'index',
+      se è possibile formare la sequenza tokens[pos..].
+        - Se tokens[pos] non coincide con matrix[index], restituisce false.
+        - Altrimenti, se pos è l’ultimo token, restituisce true.
+        - Altrimenti prova ad andare in tutte le 8 direzioni (verticali, orizzontali, diagonali).
+        - Usa l’array visted[] per non riusare la stessa cella più di una volta nella parola.
+ */
 
 static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, int index, bool visted[16])
 {
+    // se abbiamo gia' matchato tutti i token (pos == total)
     if (pos == total)
-        return true; // parola terminata con successo
+        return true; // parola trovata
 
-    // matrix[index] deve matchare con tokens[pos]
+    // matrix[index] deve matchare con tokens[pos]. confronto case-insensitive
     if (strcasecmp(matrix[index], tokens[pos]) != 0)
     {
         return false;
     }
 
-    // visitato
+    // marca cella visistata
     visted[index] = true;
 
     // controllo ultimo token
@@ -124,8 +143,10 @@ static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, i
         if (rr < 0 || rr >= 4 || cc < 0 || cc >= 4) // esclude fuori dalla matrice
             continue;
         int new_index = rr * 4 + cc;
+        // se la cella adiacente non e' ancora usata
         if (!visted[new_index])
         {
+            // ricorsiva sul token successivo
             if (dfs_find(matrix, tokens, pos + 1, total, new_index, visted))
             {
                 found = true;
@@ -133,15 +154,18 @@ static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, i
         }
     }
 
-    // smarcare
+    // rimozione segno sulla cella
     visted[index] = false;
     return found;
 }
 
-// is_word_in_matrix
-//  tokenizza la parola,
-//  verifica almneno 4 token di lunghezza per validita' minima
-//  inizia la ricerca con dfs_find per controllare se la parola si puo' comporre (anche in diagonale), senza riuso di celle
+/*
+    is_word_in_matrix:
+        Verifica se una data parola è "componibile" dalla matrice di lettere.
+        - Tokenizza la parola in modo che 'qu' diventi un singolo token.
+        - Richiede che la parola abbia almeno 4 caratteri logici (tcount >= 4).
+        - Usa la dfs_find() a partire da ognuna delle 16 celle, finché non trova un match o esaurisce tutte le possibilità.
+ */
 
 bool is_word_in_matrix(char matrix[16][5], const char *word)
 {
@@ -169,5 +193,6 @@ bool is_word_in_matrix(char matrix[16][5], const char *word)
             return true; // parola trovata
         }
     }
+    // parola non presente in matrice
     return false;
 }

@@ -18,8 +18,10 @@ client_paroliere.c
 #include <stdbool.h>
 #include <ctype.h>
 
+// definizioni di costanti
 #define BUFFER_SIZE 512
 
+// costanti del protocollo
 #define MSG_OK 'K'
 #define MSG_ERR 'E'
 #define MSG_REGISTRA_UTENTE 'R'
@@ -35,10 +37,20 @@ client_paroliere.c
 #define MSG_POST_BACHECA 'H'
 #define MSG_SHOW_BACHECA 'S'
 
+// variabile volatile globale utilizzato per segnalare terminazione
+//  non adotta cancellazione/cancellation point come client, ma flag e shutdown su socket
 volatile sig_atomic_t shutdown_flag = 0;
+
+// mutex per sincronizzazione
 pthread_mutex_t output_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// normalizzazione prima di inviare la parola
+/*
+     normalize_word:
+         Converte i caratteri in minuscolo ed effettua la gestione speciale del digramma 'qu':
+            se incontra 'q' seguito da 'u', li aggiunge entrambi come "qu";
+            se trova una 'q' non seguita da 'u', la ignora (da definizione nel codice).
+        Tale strategia rende coerente l’invio della parola al server.
+ */
 void normalize_word(char *word)
 {
     char temp[BUFFER_SIZE] = {0};
@@ -56,6 +68,7 @@ void normalize_word(char *word)
             }
             else
             {
+                // se la 'q' non e' seguita da 'u', ignora
                 continue;
             }
         }
@@ -68,7 +81,13 @@ void normalize_word(char *word)
     strcpy(word, temp);
 }
 
-// controllo sul formato del nome utente <= 10 caratteri
+/*
+    valida_nome_utente
+        verifica il formato della stringa che:
+            non superi 10 caratteri
+            sia composta da caratteri alfanumerici
+            non vuota
+*/
 bool valida_nome_utente(const char *nome)
 {
     int len = strlen(nome);
@@ -82,7 +101,13 @@ bool valida_nome_utente(const char *nome)
     return true;
 }
 
-// funizioni per invio e ricezione messaggi
+// ======================= Funzioni di comunicazione =======================
+/*
+    send_mesage:
+    invia un messaggio al client secondo il protocollo:
+        [1 byte type] [4 bytre lunghezza (network order)] [data]
+    restituisce 0 in caso di successo, -1 per erroree
+*/
 int send_message(int sockfd, char type, const char *data, unsigned int length)
 {
     unsigned int netlen = htonl(length);
@@ -98,6 +123,11 @@ int send_message(int sockfd, char type, const char *data, unsigned int length)
     return 0;
 }
 
+/*
+    receive_message:
+    Riceve un messaggio dal socket (server), seguendo lo stesso formato di protocollo.
+    Restituisce 0 in caso di successo, -1 in caso di errore o disconnessione.
+*/
 int receive_message(int sockfd, char *type, char *data, unsigned int *length)
 {
     ssize_t n = read(sockfd, type, 1);
@@ -132,7 +162,13 @@ int receive_message(int sockfd, char *type, char *data, unsigned int *length)
     }
     return 0;
 }
-
+/*
+    client_thread:
+        thread dedicato alla ricezione continua dei messaggi del server
+         - legge i messaggi usando receive_message
+         - li interpreta e li stampa
+         - in caso di erroe o di messaggio di shutdown, shutdown_flag = 1
+    */
 // thread di ricezione, riceve continuamente messaggi dal server e li stampa
 void *client_receiver(void *arg)
 {
@@ -143,8 +179,10 @@ void *client_receiver(void *arg)
 
     while (!shutdown_flag)
     {
+        // Se la ricezione fallisce, cerchiamo di capire se è timeout o errore di connessione
         if (receive_message(sockfd, &type, data, &length) < 0)
         {
+            // errore EAGAIN / EWOULDBLOCK, read su socket scaduta per timeout
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 fprintf(stderr, "\n[SERVER] Timeout di ricezione\n");
@@ -156,6 +194,7 @@ void *client_receiver(void *arg)
             shutdown_flag = 1;
             break;
         }
+        // chiusura connessione
         if (type == MSG_SERVER_SHUTDOWN)
         {
             printf("\r\33[2K"); // Cancella la linea corrente
@@ -164,7 +203,8 @@ void *client_receiver(void *arg)
             break;
         }
         pthread_mutex_lock(&output_mutex);
-        // Cancella la riga corrente (cancella il prompt ed eventuale input parziale)
+
+        // \r\33[2K: spostare il cursore all'inizio e cancellare la riga corrente in console
         printf("\r\33[2K");
         switch (type)
         {
@@ -177,8 +217,8 @@ void *client_receiver(void *arg)
         case MSG_MATRICE:
         {
             printf("\n[SERVER] MATRICE: %s\n", data);
-            // per gestire caso in cui non e' in partita e deve stampare i secondi
-            //  Copia la stringa per contare i token senza modificarla
+
+            // Copia la stringa per contare i token senza modificarla
             char copy[BUFFER_SIZE];
             strncpy(copy, data, BUFFER_SIZE);
             copy[BUFFER_SIZE - 1] = '\0';
@@ -239,7 +279,10 @@ void *client_receiver(void *arg)
     return NULL;
 }
 
-// print help
+/*
+    print_help:
+        mostra l'elenco dei comandi disponibili sul client
+*/
 void print_help()
 {
     pthread_mutex_lock(&output_mutex);
@@ -257,10 +300,17 @@ void print_help()
     pthread_mutex_unlock(&output_mutex);
 }
 
-// funzione principale della logica di client
+/*
+funzione principale della logica di client
+    client_run:
+        Crea il thread di ricezione messaggi dal server (client_receiver).
+        Gestisce la lettura dei comandi da stdin e la loro formattazione verso il server.
+        In caso di comando "fine", chiude la connessione e aspetta la terminazione del thread.
+ */
 void client_run(int sockfd)
 {
     pthread_t recv_thread;
+    // creazione thread receiver
     if (pthread_create(&recv_thread, NULL, client_receiver, &sockfd) != 0)
     {
         perror("pthread_create");
@@ -285,6 +335,7 @@ void client_run(int sockfd)
         fflush(stdout);
         pthread_mutex_unlock(&output_mutex);
 
+        // lettura l'input dal console
         if (fgets(input, sizeof(input), stdin) == NULL)
             break;
 
@@ -301,6 +352,7 @@ void client_run(int sockfd)
         }
 
         // Gestione di tutti i comandi con strcmp sul comando estratto
+        // REGISTRAZIONE
         if (strcmp(comando, "registra_utente") == 0)
         {
             if (parametro == NULL)
@@ -308,7 +360,7 @@ void client_run(int sockfd)
                 printf("Specifica un nome utente.\n");
                 continue;
             }
-            // Pulizia spazi iniziali dal parametro
+            // rimuovi spazi iniziali dal parametro
             while (*parametro == ' ')
                 parametro++;
             if (!valida_nome_utente(parametro))
@@ -318,7 +370,7 @@ void client_run(int sockfd)
             }
             send_message(sockfd, MSG_REGISTRA_UTENTE, parametro, strlen(parametro));
         }
-
+        // LOGIN
         else if (strcmp(comando, "login_utente") == 0)
         {
             if (parametro == NULL)
@@ -335,7 +387,7 @@ void client_run(int sockfd)
             }
             send_message(sockfd, MSG_LOGIN_UTENTE, parametro, strlen(parametro));
         }
-
+        // CANCELLAZIONE
         else if (strcmp(comando, "cancella_registrazione") == 0)
         {
             if (parametro == NULL)
@@ -345,12 +397,12 @@ void client_run(int sockfd)
             }
             send_message(sockfd, MSG_CANCELLA_UTENTE, parametro, strlen(parametro));
         }
-
+        // MATRICE
         else if (strcmp(comando, "matrice") == 0)
         {
             send_message(sockfd, MSG_MATRICE, "", 0);
         }
-
+        // MESSAGGIO SU BACHECA
         else if (strcmp(comando, "msg") == 0)
         {
             if (parametro == NULL)
@@ -362,12 +414,12 @@ void client_run(int sockfd)
                 parametro++;
             send_message(sockfd, MSG_POST_BACHECA, parametro, strlen(parametro) + 1);
         }
-
+        // VISUALIZZA BACHECA
         else if (strcmp(comando, "show-msg") == 0)
         {
             send_message(sockfd, MSG_SHOW_BACHECA, "", 0);
         }
-
+        // PAROLA
         else if (strcmp(comando, "p") == 0)
         {
             if (parametro == NULL)
@@ -380,12 +432,12 @@ void client_run(int sockfd)
             normalize_word(parametro);
             send_message(sockfd, MSG_PAROLA, parametro, strlen(parametro) + 1);
         }
-
+        // AIUTO
         else if (strcmp(comando, "aiuto") == 0)
         {
             print_help();
         }
-
+        // FINE
         else if (strcmp(comando, "fine") == 0)
         {
             shutdown_flag = 1;
@@ -401,6 +453,7 @@ void client_run(int sockfd)
     }
     printf("\n");
     close(sockfd);
+
     pthread_join(recv_thread, NULL);
     printf("Client terminato.\n");
 }

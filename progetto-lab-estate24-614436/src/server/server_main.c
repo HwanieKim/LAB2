@@ -8,13 +8,20 @@ sintassi: Sintassi:
  *                   [--durata durata_in_minuti] [--seed rnd_seed]
  *                   [--diz dizionario] [--disconnetti-dopo minuti]
  *
- * Le scelte:
- *  - Il parametro "nome_server" viene fornito ma non usato (il server ascolta su tutte le interfacce).
- *  - Se --matrici viene specificato, il server caricherà le matrici da file; altrimenti le genera casualmente.
- *  - --seed permette di impostare il seed per la generazione pseudocasuale.
- *  - --disconnetti-dopo indica il tempo di inattività dopo il quale il client viene espulso.
+ *  Opzioni:
+     - nome_server: è un parametro formale (il server di fatto ascolta su INADDR_ANY),
+       ma può essere usato come etichetta o nome logico del server.
+     - porta_server: indica la porta su cui il server sarà in ascolto per le connessioni.
+     - --matrici <file>: se specificato, il server carica la matrice da questo file
+       (altrimenti la genera casualmente).
+     - --durata <minuti>: durata di una singola partita (default 3 minuti).
+     - --seed <rnd_seed>: seed per la generazione pseudo-casuale della matrice
+       (se non specificato, usa time(NULL)).
+     - --diz <dizionario>: percorso file dizionario (default: "dictionary.txt").
+     - --disconnetti-dopo <minuti>: tempo di inattività prima di disconnettere un client (default: 3 minuti).
 */
 
+// include
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +50,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // impostazione il nome del server per log e messaggi interni
     server_set_name(argv[1]);
 
+    // parsing della porta e controllo di validita'
     char *endptr;
     long port = strtol(argv[2], &endptr, 10);
     if (*endptr != '\0' || port < 1025 || port > 65535)
@@ -62,8 +71,10 @@ int main(int argc, char *argv[])
     int disconnect_min = 3;                       // timeout inattivita' di default : 3 minuti
 
     // parsint parametri
+    // gestione argomenti opzionali passati tramite getopt_long
     int opt;
     int option_index = 0;
+    // specifica le opzioni supportate e l'eventuale argomento necessario
     static struct option long_options[] = {
         {"matrici", required_argument, 0, 'm'},
         {"durata", required_argument, 0, 'd'},
@@ -107,7 +118,7 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
     }
-
+    // convesioni in secondi
     int game_duration_sec = durata_min * 60;
     int break_time_sec = break_min * 60;
     int disconnect_after_sec = disconnect_min * 60;
