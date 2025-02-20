@@ -194,6 +194,7 @@ void *client_receiver(void *arg)
             shutdown_flag = 1;
             break;
         }
+
         // chiusura connessione
         if (type == MSG_SERVER_SHUTDOWN)
         {

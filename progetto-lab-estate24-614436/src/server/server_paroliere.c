@@ -450,6 +450,13 @@ void push_score(const char *username, int score)
     pthread_mutex_unlock(&score_queue_mutex);
 }
 
+// Funzione di cleanup per il thread orchestrator
+static void orchestrator_cleanup(void *arg)
+{
+    (void)arg;
+    log_event("[ORCHESTRATOR] Terminato");
+}
+
 //======================= THREAD ORCHESTRATOR =======================
 // thread per gestione client, orchestratore
 /*
@@ -464,6 +471,8 @@ void push_score(const char *username, int score)
 static void *orchestrator_thread(void *arg)
 {
     (void)arg;
+    // registrazione cleanup handler
+    pthread_cleanup_push_defer_np(orchestrator_cleanup, NULL);
 
     // Abilita la cancellazione (cancellation point)
     // per permettere di "forzare" la terminazione del thread senza dover attendere che il thread stesso termini,
@@ -604,13 +613,14 @@ static void *orchestrator_thread(void *arg)
             usleep(10000);
         }
     }
+    pthread_cleanup_pop(1);
     return NULL;
 }
 // ======================= thread scorer =======================
 /*
     scorer_thread:
         gestisce la raccolta e l'elaborazione dei punteggi finali della partita
-        - attende che tutti i client abbiano inviato i propri punteggi tramite la coda condivisa
+        - attende che tutti i client abbiano inviato i propri punteggi tramcte la coda condivisa
         - utilizza una condition variable per sincronizzarsi con i thread client e attendere il completamento
         - quando tutti i punteggi attesi sono stati raccolti:
             + ordina i punteggi in ordine decrescente per generare la classifica finale
@@ -822,7 +832,8 @@ static void *client_thread(void *arg)
             last_activity = time(NULL);
         }
 
-        // gestione di messaggi di tipo MSG_SERVER_SHUTDOWN inviati esplicitamente dal client if (type == MSG_SERVER_SHUTDOWN)
+        // gestione di messaggi di tipo MSG_SERVER_SHUTDOWN inviati esplicitamente dal client
+        if (type == MSG_SERVER_SHUTDOWN)
         {
             safe_printf("\n[SERVER] Shutdown: %s\n", data);
             break;
@@ -833,8 +844,8 @@ static void *client_thread(void *arg)
         {
         case MSG_REGISTRA_UTENTE:
         {
-            pthread_mutex_lock(&g_server.registered_mutex);
             pthread_mutex_lock(&g_server.clients_mutex);
+            pthread_mutex_lock(&g_server.registered_mutex);
             safe_printf("[SERVER] Ricevuto messaggio di registrazione per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuta registrazione: %s", data);
 
@@ -842,8 +853,8 @@ static void *client_thread(void *arg)
             if (strlen(data) > 10 || strpbrk(data, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == NULL)
             {
                 send_message(sockfd, MSG_ERR, "Nome utente non valido", strlen("Nome utente non valido") + 1);
-                pthread_mutex_unlock(&g_server.clients_mutex);
                 pthread_mutex_unlock(&g_server.registered_mutex);
+                pthread_mutex_unlock(&g_server.clients_mutex);
                 break;
             }
 
@@ -978,8 +989,8 @@ static void *client_thread(void *arg)
                 log_event("[CLIENT] Login effettuato con succeso, utente %s", data);
             }
 
-            pthread_mutex_unlock(&g_server.clients_mutex);
             pthread_mutex_unlock(&g_server.registered_mutex);
+            pthread_mutex_unlock(&g_server.clients_mutex);
             break;
         }
 
@@ -1282,8 +1293,6 @@ int server_init(
     {
         log_event("[SYSTEM] File di log aperto");
     }
-    log_event("test");
-
     // caricamento il dizionario nel trie
     if (dict_file == NULL)
     {
