@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g  -I./src
+CFLAGS = -Wall -pedantic -Wextra -std=c99 -g  -I./src
 LDFLAGS = -lpthread 
 
 SRV_SRCS = src/server/server_main.c src/server/server_paroliere.c src/server/dictionary.c src/server/matrix.c
