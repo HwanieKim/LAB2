@@ -210,6 +210,51 @@ void safe_printf(const char *format, ...)
 
 // ======================= Funzioni di comunicazione =======================
 /*
+    robust_write:
+        scrive 'count' byte sul descrittore fd, ripetendo in caso di interruzioni
+*/
+ssize_t robust_write(int fd, const void *buf, size_t count)
+{
+    size_t total_written = 0;
+    const char *buffer = (const char *)buf;
+    while (total_written < count)
+    {
+        ssize_t written = write(fd, buffer + total_written, count - total_written);
+        if (written < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        total_written += written;
+    }
+    return total_written;
+}
+
+/*
+    robust_read:
+        legge 'count' byte dal descrittore fd, ripetendo caso di interrupt
+*/
+ssize_t robust_read(int fd, void *buf, size_t count)
+{
+    size_t total_read = 0;
+    char *buffer = (char *)buf;
+    while (total_read < count)
+    {
+        ssize_t r = read(fd, buffer + total_read, count - total_read);
+        if (r < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        if (r == 0)
+            break; // fine flusso
+        total_read += r;
+    }
+    return total_read;
+}
+/*
     send_mesage:
     invia un messaggio al client secondo il protocollo:
         [1 byte type] [4 bytre lunghezza (network order)] [data]
@@ -220,19 +265,22 @@ static int send_message(int sockfd, char type, const char *data, unsigned int le
 {
     // conversione in network length
     unsigned int netlen = htonl(length);
-    if (write(sockfd, &type, 1) != 1)
+    if (robust_write(sockfd, &type, 1) != 1)
     {
+        perror("robust_write(type)");
         return -1;
     }
 
-    if (write(sockfd, &netlen, 4) != 4)
+    if (robust_write(sockfd, &netlen, 4) != 4)
     {
+        perror("robust_write(netlen)");
         return -1;
     }
     if (length > 0)
     {
-        if (write(sockfd, data, length) != (ssize_t)length)
+        if (robust_write(sockfd, data, length) != (ssize_t)length)
         {
+            perror("robust_write(data)");
             return -1;
         }
     }
@@ -248,39 +296,35 @@ static int send_message(int sockfd, char type, const char *data, unsigned int le
 */
 static int receive_message(int sockfd, char *type, char *data, unsigned int *length)
 {
-    if (!type || !data || !length)
-    {
-        return -1;
-    }
-    ssize_t n = read(sockfd, type, 1);
+    ssize_t n = robust_read(sockfd, type, 1);
     if (n <= 0)
     {
+        perror("robust_read(type)");
         return -1;
     }
 
     unsigned int netlen;
-    n = read(sockfd, &netlen, 4);
+    n = robust_read(sockfd, &netlen, 4);
     if (n <= 0)
     {
+        perror("robust_read(netlen)");
         return -1;
     }
 
     // conversione da network length
-    unsigned int msglen = ntohl(netlen);
-    *length = msglen;
+    *length = ntohl(netlen);
+    if (*length > BUFFER_SIZE - 1)
+        *length = BUFFER_SIZE - 1; // troncamento per prevenire overflow
 
-    if (msglen > 0)
+    if (*length > 0)
     {
-        n = read(sockfd, data, msglen);
+        n = robust_read(sockfd, data, *length);
         if (n <= 0)
         {
+            perror("robust_read(data)");
             return -1;
         }
         data[n] = '\0'; // Aggiungi il carattere di terminazione
-    }
-    else
-    {
-        data[0] = '\0';
     }
 
     return 0;
@@ -984,7 +1028,7 @@ static void *client_thread(void *arg)
             }
             else
             {
-                strcpy(g_server.clients[idx].username, data); // Login corretto
+                strncpy(g_server.clients[idx].username, data, USERNAME_LEN - 1); // Login corretto
                 send_message(sockfd, MSG_OK, "Login effettuato", 17);
                 log_event("[CLIENT] Login effettuato con succeso, utente %s", data);
             }
@@ -1093,7 +1137,9 @@ static void *client_thread(void *arg)
                 // registra la parola e aggiorna il punteggio
                 if (g_server.clients[idx].used_words_count < MAX_WORDS_USED)
                 {
-                    strcpy(g_server.clients[idx].used_words[g_server.clients[idx].used_words_count], data);
+                    strncpy(g_server.clients[idx].used_words[g_server.clients[idx].used_words_count], data, sizeof(g_server.clients[idx].used_words[g_server.clients[idx].used_words_count]) - 1);
+                    // terminatore
+                    g_server.clients[idx].used_words[g_server.clients[idx].used_words_count][sizeof(g_server.clients[idx].used_words[g_server.clients[idx].used_words_count]) - 1] = '\0';
                     g_server.clients[idx].used_words_count++;
                 }
                 g_server.clients[idx].score += points;

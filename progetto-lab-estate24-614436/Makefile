@@ -7,6 +7,8 @@ CLI_SRCS = src/client/client_main.c src/client/client_paroliere.c
 
 all: paroliere_srv paroliere_cl
 
+.PHONY: clean
+
 paroliere_srv: $(SRV_SRCS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
