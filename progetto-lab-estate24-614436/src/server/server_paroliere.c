@@ -299,7 +299,10 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
     ssize_t n = robust_read(sockfd, type, 1);
     if (n <= 0)
     {
-        perror("robust_read(type)");
+        if (n < 0 && (errno != EAGAIN && errno != EINTR))
+        {
+            perror("robust_read(type)");
+        }
         return -1;
     }
 
@@ -307,7 +310,10 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
     n = robust_read(sockfd, &netlen, 4);
     if (n <= 0)
     {
-        perror("robust_read(netlen)");
+        if (n < 0 && (errno != EAGAIN && errno != EINTR))
+        {
+            perror("robust_read(netlen)");
+        }
         return -1;
     }
 
@@ -321,8 +327,12 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
         n = robust_read(sockfd, data, *length);
         if (n <= 0)
         {
-            perror("robust_read(data)");
+            if (n < 0 && (errno != EAGAIN && errno != EINTR))
+            {
+                perror("robust_read(data)");
+            }
             return -1;
+            ;
         }
         data[n] = '\0'; // Aggiungi il carattere di terminazione
     }
@@ -516,7 +526,7 @@ static void *orchestrator_thread(void *arg)
 {
     (void)arg;
     // registrazione cleanup handler
-    pthread_cleanup_push_defer_np(orchestrator_cleanup, NULL);
+    pthread_cleanup_push(orchestrator_cleanup, NULL);
 
     // Abilita la cancellazione (cancellation point)
     // per permettere di "forzare" la terminazione del thread senza dover attendere che il thread stesso termini,
@@ -576,7 +586,8 @@ static void *orchestrator_thread(void *arg)
         while (!g_server.stop && difftime(time(NULL), game_start) < g_server.game_duration)
         {
             pthread_testcancel();
-            usleep(10000);
+            struct timespec req = {0, 10000 * 1000}; // 10 ms
+            nanosleep(&req, NULL);
         }
 
         // fine partita
@@ -654,7 +665,8 @@ static void *orchestrator_thread(void *arg)
         while (!g_server.stop && difftime(time(NULL), g_server.break_start_time) < g_server.break_time)
         {
             pthread_testcancel();
-            usleep(10000);
+            struct timespec req = {0, 10000 * 1000}; // 10 ms
+            nanosleep(&req, NULL);
         }
     }
     pthread_cleanup_pop(1);
@@ -883,6 +895,24 @@ static void *client_thread(void *arg)
             break;
         }
 
+        // Verifica se l'utente è loggato
+        bool is_logged_in = (g_server.clients[idx].username[0] != '\0');
+
+        // // Se non è loggato, consenti solo fine/resgitrzione/login
+        if (!is_logged_in)
+        {
+            if (type != MSG_SERVER_SHUTDOWN &&
+                type != MSG_REGISTRA_UTENTE &&
+                type != MSG_LOGIN_UTENTE)
+            {
+                // Comando non ammesso prima del login
+                send_message(sockfd, MSG_ERR,
+                             "Devi prima fare login, registrarti o chiudere la connessione (fine).",
+                             strlen("Devi prima fare login, registrarti o chiudere la connessione (fine).") + 1);
+                continue;
+            }
+        }
+
         // elabora messaggio
         switch (type)
         {
@@ -1031,6 +1061,38 @@ static void *client_thread(void *arg)
                 strncpy(g_server.clients[idx].username, data, USERNAME_LEN - 1); // Login corretto
                 send_message(sockfd, MSG_OK, "Login effettuato", 17);
                 log_event("[CLIENT] Login effettuato con succeso, utente %s", data);
+                if (g_server.game_running)
+                {
+                    // invio matrice
+                    char matrix_buf[BUFFER_SIZE] = "";
+                    for (int i = 0; i < 16; i++)
+                    {
+
+                        strcat(matrix_buf, g_server.matrix[i]);
+                        if (i < 15)
+                            strcat(matrix_buf, " ");
+                    }
+                    send_message(sockfd, MSG_MATRICE, matrix_buf, (unsigned int)strlen(matrix_buf) + 1);
+                    // invio tempo residuo
+                    int remaining = g_server.game_duration - (int)difftime(time(NULL), g_server.game_start_time);
+                    char time_str[32];
+                    snprintf(time_str, sizeof(time_str), "%d", remaining);
+                    send_message(sockfd, MSG_TEMPO_PARTITA, time_str, strlen(time_str) + 1);
+                }
+                else
+                {
+                    // invio tempo attesa
+                    int remaining_break = g_server.break_time - (int)difftime(time(NULL), g_server.break_start_time);
+                    if (remaining_break < 0)
+                    {
+                        remaining_break = 0;
+                    }
+
+                    // Costruisce una stringa CSV: primo campo il tempo di default, secondo il tempo rimanente
+                    char csv_str[64];
+                    snprintf(csv_str, sizeof(csv_str), "pausa di %d secondi, e l'inizio della nuova partita tra %d", g_server.break_time, remaining_break);
+                    send_message(sockfd, MSG_MATRICE, csv_str, strlen(csv_str) + 1);
+                }
             }
 
             pthread_mutex_unlock(&g_server.registered_mutex);
@@ -1040,8 +1102,18 @@ static void *client_thread(void *arg)
 
         case MSG_CANCELLA_UTENTE:
         {
+
             safe_printf("[SERVER] Ricevuto comando di cancellazione per l'utente: %s\n", data);
             log_event("[CLIENT] Ricevuta cancellazione registrazione: %s", data);
+            // Se il client sta tentando di cancellare se stesso mentre è loggato,
+            // rifiuta la richiesta
+            if (strcmp(g_server.clients[idx].username, data) == 0)
+            {
+                send_message(sockfd, MSG_ERR, "Non puoi cancellare l'utente con cui sei loggato",
+                             strlen("Non puoi cancellare l'utente con cui sei loggato") + 1);
+                log_event("[CLIENT] Richiesta di cancellazione rifiutata: %s è loggato", data);
+                break;
+            }
             pthread_mutex_lock(&g_server.registered_mutex);
 
             bool trovato = false;
@@ -1544,7 +1616,7 @@ void server_shutdown()
     shutdown_in_progress = true;
 
     g_server.stop = true;
-    safe_printf("[SERVER] avvio shutdown... \n");
+    safe_printf("\n[SERVER] avvio shutdown... \n");
     log_event("[SYSTEM] Avvio shutdown");
 
     // Risveglia tutti i thread bloccati sui condition variable:

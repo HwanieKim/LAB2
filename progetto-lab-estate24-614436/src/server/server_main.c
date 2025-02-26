@@ -63,12 +63,12 @@ int main(int argc, char *argv[])
     }
 
     // valori default
-    int durata_min = 3;                           // durata partita di default : 3 minuti
-    int break_min = 1;                            // pausa tra partite : 1 minuto fisso
-    const char *dict_filename = "dictionary.txt"; // dizionario di default
-    const char *matrix_filename = NULL;           // se non viene fornita, matrice generata casualmente
-    int seed = -1;                                // se -1, si usa time(NULL) come seed
-    int disconnect_min = 3;                       // timeout inattivita' di default : 3 minuti
+    int durata_min = 3;                 // durata partita di default : 3 minuti
+    int break_min = 1;                  // pausa tra partite : 1 minuto fisso
+    const char *dict_filename = NULL;   // dizionario di default
+    const char *matrix_filename = NULL; // se non viene fornita, matrice generata casualmente
+    int seed = -1;                      // se -1, si usa time(NULL) come seed
+    int disconnect_min = 3;             // timeout inattivita' di default : 3 minuti
 
     // parsint parametri
     // gestione argomenti opzionali passati tramite getopt_long
@@ -118,6 +118,13 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
     }
+
+    if (matrix_filename != NULL && seed != -1)
+    {
+        fprintf(stderr, "[ERROR] Non puoi specificare sia --matrici che --seed!\n");
+        exit(EXIT_FAILURE);
+    }
+
     // convesioni in secondi
     int game_duration_sec = durata_min * 60;
     int break_time_sec = break_min * 60;

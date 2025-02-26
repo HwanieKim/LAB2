@@ -192,7 +192,12 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
     ssize_t n = robust_read(sockfd, type, 1);
     if (n <= 0)
     {
-        perror("robust_read(type)");
+        // if (n < 0) => c'è un errore, se n == 0 => EOF
+        // Filtra i casi "normali" e logga solo quelli “gravi”:
+        if (n < 0 && (errno != EAGAIN && errno != EINTR))
+        {
+            perror("robust_read(type)");
+        }
         return -1;
     }
 
@@ -200,7 +205,10 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
     n = robust_read(sockfd, &netlen, 4);
     if (n <= 0)
     {
-        perror("robust_read(netlen)");
+        if (n < 0 && (errno != EAGAIN && errno != EINTR))
+        {
+            perror("robust_read(netlen)");
+        }
         return -1;
     }
 
@@ -214,7 +222,10 @@ static int receive_message(int sockfd, char *type, char *data, unsigned int *len
         n = robust_read(sockfd, data, *length);
         if (n <= 0)
         {
-            perror("robust_read(data)");
+            if (n < 0 && (errno != EAGAIN && errno != EINTR))
+            {
+                perror("robust_read(data)");
+            }
             return -1;
         }
         data[n] = '\0'; // Aggiungi il carattere di terminazione
