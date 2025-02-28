@@ -1,32 +1,4 @@
-/*
-dictionary.c
-    gestione dizionario tramite struttura trie
-    ogni riga del file contiene una parola (terminata da newline)
-    ricerca case-insensitive
-*/
-//======================= include =======================
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <ctype.h>
-
-// ======================= define =======================
-#define ALPHABET_SIZE 27 // aggiunta per un indice per 'qu'
-
-// ======================= struttura trie =======================
-typedef struct trie_node
-{
-    bool end_of_word;
-    struct trie_node *children[ALPHABET_SIZE];
-} trie_node;
-
-// ======================= dichiarazioni extern =======================
-extern trie_node *trie_create_node(void);
-extern void trie_insert(trie_node *root, const char *word);
-extern bool trie_search(trie_node *root, const char *word);
-extern void *load_dictionary_trie(const char *filename);
-
+#include "dictionary.h"
 //======================= creazione nuovo nodo trie =======================
 trie_node *trie_create_node(void)
 {
@@ -43,9 +15,20 @@ trie_node *trie_create_node(void)
 }
 
 // ======================= inserzione parola nel trie =======================
-
 void trie_insert(trie_node *root, const char *word)
 {
+    if (word == NULL)
+    {
+        printf("Errore: la parola non può essere NULL.\n");
+        return;
+    }
+    int word_len = strlen(word);
+    if (word_len == 0 || word_len > 255)
+    {
+        printf("Errore: la lunghezza della parola deve essere compresa tra 1 e 255 caratteri.\n");
+        return;
+    }
+    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     trie_node *curr = root;
     for (int i = 0; word[i]; i++)
     {
@@ -87,6 +70,18 @@ void trie_insert(trie_node *root, const char *word)
 //======================= ricerca =======================
 bool trie_search(trie_node *root, const char *word)
 {
+    if (word == NULL)
+    {
+        printf("Errore: la parola non può essere NULL.\n");
+        return false;
+    }
+
+    int word_len = strlen(word);
+    if (word_len == 0 || word_len > 255)
+    {
+        printf("Errore: la lunghezza della parola deve essere compresa tra 1 e 255 caratteri.\n");
+        return false;
+    }
     trie_node *curr = root;
     for (int i = 0; word[i]; i++)
     {
@@ -128,15 +123,20 @@ void trie_free(trie_node *node)
     }
     free(node);
 }
+
 // ======================= caricamento dizionario =======================
 /*
     load_dictionary_trie:
         carica un file di dizionario e inserisce le parole nel trie
         ritorna il puntatore al nodo radice del trie;
 */
-
 void *load_dictionary_trie(const char *filename)
 {
+    if (filename == NULL)
+    {
+        printf("Errore: il nome del file del dizionario non può essere NULL.\n");
+        return NULL;
+    }
 
     FILE *fp = fopen(filename, "r");
     if (!fp)

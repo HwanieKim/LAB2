@@ -10,20 +10,7 @@ client_main.c
             • porta_server `e il numero della porta alla quale collegarsi;
 */
 
-// include
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <pthread.h>
-#include <errno.h>
-
-#define BUFFER_SIZE 512
-
-// dichiarazioni extern
-extern void client_run(int sockfd);
+#include "client.h"
 
 int main(int argc, char *argv[])
 {

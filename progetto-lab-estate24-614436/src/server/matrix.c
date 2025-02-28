@@ -1,15 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <stdbool.h>
-#include <ctype.h>
-#include <strings.h>
-
-// dichiarazioni extern
-extern void generate_matrix(char matrix[16][5], unsigned int seed);
-extern bool is_word_in_matrix(char matrix[16][5], const char *word);
-extern int count_letters(const char *word);
+#include "matrix.h"
 
 static const char *LETTERS[] = {
     "A", "B", "C", "D", "E", "F", "G", "H",
@@ -18,12 +7,6 @@ static const char *LETTERS[] = {
 
 static int LETTERS_COUNT = 21;
 
-/*
-    generate_matrix:
-        genera una matrice 4x4 di lettere casuali, riempie un array lineare di 16 celle, ognuna fino a 4 char
-        generazione randomica di lettere conla funzione rand() e modulo LETTERS_COUNT
-
-*/
 void generate_matrix(char matrix[16][5], unsigned int seed)
 {
     srand(seed); // Usa il seed passato dal server
@@ -35,13 +18,9 @@ void generate_matrix(char matrix[16][5], unsigned int seed)
     }
 }
 
-/*
-    count_letters:
-        conta caratteri logici di una parola, qu considerato come 1
-        EX) "ciao" -> 4, "ciaoqu" -> 5
-*/
 int count_letters(const char *word)
 {
+    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     int count = 0;
     for (int i = 0; word[i]; i++)
     {
@@ -60,15 +39,10 @@ int count_letters(const char *word)
     }
     return count;
 }
-/*
-    tokenize_word:
-        convertire la parola in un array di token, dove 'qu' viene trattato come unico token
-        tokens[pos] e' al massimo 2 caratteri piu' il terminatore
-        restituisce il numero di token estratti
 
-*/
-static int tokenize_word(const char *word, char tokens[][3])
+int tokenize_word(const char *word, char tokens[][3])
 {
+    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     int tcount = 0;
     int i = 0;
     while (word[i])
@@ -104,8 +78,7 @@ static int tokenize_word(const char *word, char tokens[][3])
         - Altrimenti prova ad andare in tutte le 8 direzioni (verticali, orizzontali, diagonali).
         - Usa l’array visted[] per non riusare la stessa cella più di una volta nella parola.
  */
-
-static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, int index, bool visted[16])
+bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, int index, bool visted[16])
 {
     // se abbiamo gia' matchato tutti i token (pos == total)
     if (pos == total)
@@ -166,9 +139,9 @@ static bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, i
         - Richiede che la parola abbia almeno 4 caratteri logici (tcount >= 4).
         - Usa la dfs_find() a partire da ognuna delle 16 celle, finché non trova un match o esaurisce tutte le possibilità.
  */
-
 bool is_word_in_matrix(char matrix[16][5], const char *word)
 {
+    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     char tokens[32][3];
     memset(tokens, 0, sizeof(tokens));
     int tcount = tokenize_word(word, tokens);

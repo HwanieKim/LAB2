@@ -21,24 +21,7 @@ sintassi: Sintassi:
      - --disconnetti-dopo <minuti>: tempo di inattività prima di disconnettere un client (default: 3 minuti).
 */
 
-// include
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <getopt.h>
-
-// dichiarazioni extern
-extern int server_init(
-    int port,
-    int game_duration_sec,
-    int break_time_sec,
-    const char *dict_filename,
-    const char *matrix_filename,
-    int seed,
-    int disconnect_after_sec);
-extern int server_run();
-extern void server_shutdown();
-extern void server_set_name(const char *name);
+#include "server.h"
 
 int main(int argc, char *argv[])
 {
@@ -134,17 +117,18 @@ int main(int argc, char *argv[])
     if (server_init(port, game_duration_sec, break_time_sec, dict_filename, matrix_filename, seed, disconnect_after_sec) < 0)
     {
         fprintf(stderr, "Errore inizializzazione server\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
     // avvio ciclo di accettazione
     if (server_run() < 0)
     {
         fprintf(stderr, "Errore avvio server\n");
+        server_shutdown();
+        exit(EXIT_FAILURE);
     }
 
     // shutdown server
     server_shutdown();
-
     return 0;
 }

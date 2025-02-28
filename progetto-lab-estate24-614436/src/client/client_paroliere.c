@@ -6,36 +6,7 @@ client_paroliere.c
           continuamente i messaggi dal server
 */
 
-// inlcude
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <arpa/inet.h>
-#include <pthread.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <ctype.h>
-
-// definizioni di costanti
-#define BUFFER_SIZE 512
-
-// costanti del protocollo
-#define MSG_OK 'K'
-#define MSG_ERR 'E'
-#define MSG_REGISTRA_UTENTE 'R'
-#define MSG_LOGIN_UTENTE 'L'
-#define MSG_CANCELLA_UTENTE 'D'
-#define MSG_MATRICE 'M'
-#define MSG_PAROLA 'W'
-#define MSG_PUNTI_PAROLA 'P'
-#define MSG_PUNTI_FINALI 'F'
-#define MSG_SERVER_SHUTDOWN 'B'
-#define MSG_TEMPO_PARTITA 'T'
-#define MSG_TEMPO_ATTESA 'A'
-#define MSG_POST_BACHECA 'H'
-#define MSG_SHOW_BACHECA 'S'
+#include "client.h"
 
 // variabile volatile globale utilizzato per segnalare terminazione
 //  non adotta cancellazione/cancellation point come client, ma flag e shutdown su socket
@@ -51,8 +22,11 @@ pthread_mutex_t output_mutex = PTHREAD_MUTEX_INITIALIZER;
             se trova una 'q' non seguita da 'u', la ignora (da definizione nel codice).
         Tale strategia rende coerente l’invio della parola al server.
  */
-void normalize_word(char *word)
+void normalize_word(char *word, int word_len)
 {
+    if (word_len < 0)
+        word_len = strlen(word);
+
     char temp[BUFFER_SIZE] = {0};
     int j = 0;
     for (int i = 0; word[i] && j < BUFFER_SIZE - 1; i++)
@@ -78,7 +52,7 @@ void normalize_word(char *word)
         }
     }
     temp[j] = '\0';
-    strcpy(word, temp);
+    strncpy(word, temp, word_len);
 }
 
 /*
@@ -88,150 +62,18 @@ void normalize_word(char *word)
             sia composta da caratteri alfanumerici
             non vuota
 */
-bool valida_nome_utente(const char *nome)
+bool valida_nome_utente(const char *nome, int nome_len)
 {
-    int len = strlen(nome);
-    if (len == 0 || len > 10)
+    if (nome_len < 0)
+        nome_len = strlen(nome);
+    if (nome_len > 10)
         return false;
-    for (int i = 0; i < len; i++)
+    for (int i = 0; i < nome_len; i++)
     {
         if (!isalnum((unsigned char)nome[i]))
             return false;
     }
     return true;
-}
-
-// ======================= Funzioni di comunicazione =======================
-/*
-    robust_write:
-        scrive 'count' byte sul descrittore fd, ripetendo in caso di interruzioni
-*/
-ssize_t robust_write(int fd, const void *buf, size_t count)
-{
-    size_t total_written = 0;
-    const char *buffer = (const char *)buf;
-    while (total_written < count)
-    {
-        ssize_t written = write(fd, buffer + total_written, count - total_written);
-        if (written < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        total_written += written;
-    }
-    return total_written;
-}
-
-/*
-    robust_read:
-        legge 'count' byte dal descrittore fd, ripetendo caso di interrupt
-*/
-ssize_t robust_read(int fd, void *buf, size_t count)
-{
-    size_t total_read = 0;
-    char *buffer = (char *)buf;
-    while (total_read < count)
-    {
-        ssize_t r = read(fd, buffer + total_read, count - total_read);
-        if (r < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (r == 0)
-            break; // fine flusso
-        total_read += r;
-    }
-    return total_read;
-}
-/*
-    send_mesage:
-    invia un messaggio al client secondo il protocollo:
-        [1 byte type] [4 bytre lunghezza (network order)] [data]
-    restituisce 0 in caso di successo, -1 per erroree
-*/
-
-static int send_message(int sockfd, char type, const char *data, unsigned int length)
-{
-    // conversione in network length
-    unsigned int netlen = htonl(length);
-    if (robust_write(sockfd, &type, 1) != 1)
-    {
-        perror("robust_write(type)");
-        return -1;
-    }
-
-    if (robust_write(sockfd, &netlen, 4) != 4)
-    {
-        perror("robust_write(netlen)");
-        return -1;
-    }
-    if (length > 0)
-    {
-        if (robust_write(sockfd, data, length) != (ssize_t)length)
-        {
-            perror("robust_write(data)");
-            return -1;
-        }
-    }
-    return 0;
-}
-
-/*
-    receive_message:
-    riceve un messaggio dal client:
-        [1 byte type] [4 byte lunghezza (network order)] [data]
-    popola i parametri in output cone le informazioni ricevute.
-    ritorna 0 in caso di successo e -1 in caso di fine connessione/errore
-*/
-static int receive_message(int sockfd, char *type, char *data, unsigned int *length)
-{
-    ssize_t n = robust_read(sockfd, type, 1);
-    if (n <= 0)
-    {
-        // if (n < 0) => c'è un errore, se n == 0 => EOF
-        // Filtra i casi "normali" e logga solo quelli “gravi”:
-        if (n < 0 && (errno != EAGAIN && errno != EINTR))
-        {
-            perror("robust_read(type)");
-        }
-        return -1;
-    }
-
-    unsigned int netlen;
-    n = robust_read(sockfd, &netlen, 4);
-    if (n <= 0)
-    {
-        if (n < 0 && (errno != EAGAIN && errno != EINTR))
-        {
-            perror("robust_read(netlen)");
-        }
-        return -1;
-    }
-
-    // conversione da network length
-    *length = ntohl(netlen);
-    if (*length > BUFFER_SIZE - 1)
-        *length = BUFFER_SIZE - 1; // troncamento per prevenire overflow
-
-    if (*length > 0)
-    {
-        n = robust_read(sockfd, data, *length);
-        if (n <= 0)
-        {
-            if (n < 0 && (errno != EAGAIN && errno != EINTR))
-            {
-                perror("robust_read(data)");
-            }
-            return -1;
-        }
-        data[n] = '\0'; // Aggiungi il carattere di terminazione
-    }
-
-    return 0;
 }
 
 /*
@@ -410,13 +252,24 @@ void client_run(int sockfd)
 
         // lettura l'input dal console
         if (fgets(input, sizeof(input), stdin) == NULL)
+        {
+            if (feof(stdin))
+            {
+                printf("End of input detected.\n");
+            }
+            else
+            {
+                perror("Error reading input");
+            }
             break;
+        }
 
         input[strcspn(input, "\n")] = '\0'; // Rimuovi newline
 
         // Parsing comando e parametri
         char *comando = strtok(input, " ");
         char *parametro = strtok(NULL, "\n");
+        int param_len = parametro ? strlen(parametro) : 0;
 
         if (comando == NULL)
         {
@@ -436,12 +289,12 @@ void client_run(int sockfd)
             // rimuovi spazi iniziali dal parametro
             while (*parametro == ' ')
                 parametro++;
-            if (!valida_nome_utente(parametro))
+            if (!valida_nome_utente(parametro, param_len))
             {
                 printf("Nome utente non valido.\n");
                 continue;
             }
-            send_message(sockfd, MSG_REGISTRA_UTENTE, parametro, strlen(parametro));
+            send_message(sockfd, MSG_REGISTRA_UTENTE, parametro, param_len + 1);
         }
         // LOGIN
         else if (strcmp(comando, "login_utente") == 0)
@@ -453,12 +306,12 @@ void client_run(int sockfd)
             }
             while (*parametro == ' ')
                 parametro++;
-            if (!valida_nome_utente(parametro))
+            if (!valida_nome_utente(parametro, param_len))
             {
                 printf("Nome utente non valido.\n");
                 continue;
             }
-            send_message(sockfd, MSG_LOGIN_UTENTE, parametro, strlen(parametro));
+            send_message(sockfd, MSG_LOGIN_UTENTE, parametro, param_len + 1);
         }
         // CANCELLAZIONE
         else if (strcmp(comando, "cancella_registrazione") == 0)
@@ -468,7 +321,7 @@ void client_run(int sockfd)
                 printf("specifica un nome utente\n");
                 continue;
             }
-            send_message(sockfd, MSG_CANCELLA_UTENTE, parametro, strlen(parametro));
+            send_message(sockfd, MSG_CANCELLA_UTENTE, parametro, param_len + 1);
         }
         // MATRICE
         else if (strcmp(comando, "matrice") == 0)
@@ -485,7 +338,7 @@ void client_run(int sockfd)
             }
             while (*parametro == ' ')
                 parametro++;
-            send_message(sockfd, MSG_POST_BACHECA, parametro, strlen(parametro) + 1);
+            send_message(sockfd, MSG_POST_BACHECA, parametro, param_len + 1);
         }
         // VISUALIZZA BACHECA
         else if (strcmp(comando, "show-msg") == 0)
@@ -502,8 +355,8 @@ void client_run(int sockfd)
             }
             while (*parametro == ' ')
                 parametro++;
-            normalize_word(parametro);
-            send_message(sockfd, MSG_PAROLA, parametro, strlen(parametro) + 1);
+            normalize_word(parametro, param_len);
+            send_message(sockfd, MSG_PAROLA, parametro, param_len + 1);
         }
         // AIUTO
         else if (strcmp(comando, "aiuto") == 0)

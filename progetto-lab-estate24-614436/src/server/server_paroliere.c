@@ -1,5 +1,3 @@
-#define _GNU_SOURCE // soluzione per errore implicit declaration of signal.h
-
 /*
     server_paroliere.c
 
@@ -7,174 +5,8 @@
 
 */
 
-// include
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <signal.h>
-#include <time.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <errno.h>
-#include <stdarg.h> // per log_event e safe_ptrintf
-#include <ctype.h>
+#include "server.h"
 
-// definizioni protocollo
-#define MSG_OK 'K'
-#define MSG_ERR 'E'
-#define MSG_REGISTRA_UTENTE 'R'
-#define MSG_MATRICE 'M'
-#define MSG_TEMPO_PARTITA 'T'
-#define MSG_TEMPO_ATTESA 'A'
-#define MSG_PAROLA 'W'
-#define MSG_PUNTI_FINALI 'F'
-#define MSG_PUNTI_PAROLA 'P'
-#define MSG_SERVER_SHUTDOWN 'B'
-#define MSG_CANCELLA_UTENTE 'D'
-#define MSG_LOGIN_UTENTE 'L'
-#define MSG_POST_BACHECA 'H'
-#define MSG_SHOW_BACHECA 'S'
-
-// costanti
-#define MAX_CLIENTS 32
-#define USERNAME_LEN 32
-#define BUFFER_SIZE 512
-#define MAX_WORDS_USED 256 // massimo numero di parole proposte da un client in una partita
-#define MAX_BACHECA_MSG 8
-#define MAX_REGISTERED_USERS 1000
-#define MAX_SCORE_MSG MAX_CLIENTS
-
-// ======================= dichiarazioni extern =======================
-extern int server_init(
-    int port,
-    int game_duration_sec,
-    int break_time_sec,
-    const char *dict_file,
-    const char *matrix_file,
-    int seed,
-    int disconnect_timeout_sec);
-extern int server_run();
-extern void server_shutdown();
-
-typedef struct trie_node trie_node;
-// funzioni per trie, definite in dictionary.c
-extern void *load_dictionary_trie(const char *filename);
-extern bool trie_search(trie_node *root, const char *word);
-extern void trie_free(trie_node *node);
-
-// funzioni per matrice, definite in matrix.c
-extern void generate_matrix(char matrix[16][5], unsigned int seed);
-extern bool is_word_in_matrix(char matrix[16][5], const char *word);
-extern int count_letters(const char *word);
-
-// ======================= struttra dati =======================
-
-// struttura per gestione un client
-typedef struct
-{
-    int sockfd;
-    bool connected;
-    char username[USERNAME_LEN];
-    int score;
-
-    // parole gia' proposte da client
-    char used_words[MAX_WORDS_USED][32];
-    int used_words_count;
-
-    bool score_sent;
-    pthread_t thread_id;
-
-} client_info;
-
-// struttura per gestione registrazion utenti
-typedef struct
-{
-    char username[USERNAME_LEN];
-    bool deleted;
-} RegisteredUser;
-
-// struttura per gestione bacheca (coda circolare)
-typedef struct
-{
-    char username[USERNAME_LEN];
-    char message[128];
-} BachecaMsg;
-
-typedef struct
-{
-    BachecaMsg messages[MAX_BACHECA_MSG];
-    int front;
-    int count;
-} Bacheca;
-
-// struttura per messaggi di punteggio
-typedef struct
-{
-    char username[USERNAME_LEN];
-    int score;
-} ScoreMsg;
-
-// coda dei punteggi: conterra' i punteggi finali inviati dai client
-typedef struct
-{
-    ScoreMsg messages[MAX_SCORE_MSG];
-    int count;
-    int expected;
-} scoreQueue;
-
-// server globale
-typedef struct
-{
-    int port;
-    int server_sockfd; // socket di ascolto per nuove connesioni
-    client_info clients[MAX_CLIENTS];
-    pthread_mutex_t clients_mutex;
-
-    // matrice di gioco
-    char matrix[16][5];
-    int seed;
-
-    // parametri/ stato della partita
-    bool game_running;      // true se partita in corso
-    time_t game_start_time; // orario inizio partita
-    int game_duration;      // durata partita in secondi
-    int break_time;         // pausa tra partite in secondi
-    time_t break_start_time;
-
-    // dizionario caricato in trie
-    void *dictionary;
-
-    bool stop; // flag di shutdown (impostato da SIGINT)
-
-    // thread orchestratore per cicolo partita/pausa
-    pthread_t orchestrator_thread_id;
-    // trhead scorer per gestione classifica
-    pthread_t scorer_thread_id;
-
-    int disconnect_timeout; // timeout per inattivita' del client (sec)
-
-    // se specificato, file contenente matrice di gioco
-    char *matrix_filename;
-    FILE *matrix_fp;
-
-    // log file e mutex dedicato
-    FILE *log_fp;
-    pthread_mutex_t log_mutex;
-
-    // server name
-    char server_name[128];
-
-    // utenti registrati
-    RegisteredUser registered_users[MAX_REGISTERED_USERS];
-    int registered_count;
-    pthread_mutex_t registered_mutex;
-} server_paroliere;
-
-// variabile globale del server
 static server_paroliere g_server;
 
 // variabile globale per la bacheca
@@ -208,145 +40,13 @@ void safe_printf(const char *format, ...)
     pthread_mutex_unlock(&console_mutex);
 }
 
-// ======================= Funzioni di comunicazione =======================
-/*
-    robust_write:
-        scrive 'count' byte sul descrittore fd, ripetendo in caso di interruzioni
-*/
-ssize_t robust_write(int fd, const void *buf, size_t count)
-{
-    size_t total_written = 0;
-    const char *buffer = (const char *)buf;
-    while (total_written < count)
-    {
-        ssize_t written = write(fd, buffer + total_written, count - total_written);
-        if (written < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        total_written += written;
-    }
-    return total_written;
-}
-
-/*
-    robust_read:
-        legge 'count' byte dal descrittore fd, ripetendo caso di interrupt
-*/
-ssize_t robust_read(int fd, void *buf, size_t count)
-{
-    size_t total_read = 0;
-    char *buffer = (char *)buf;
-    while (total_read < count)
-    {
-        ssize_t r = read(fd, buffer + total_read, count - total_read);
-        if (r < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (r == 0)
-            break; // fine flusso
-        total_read += r;
-    }
-    return total_read;
-}
-/*
-    send_mesage:
-    invia un messaggio al client secondo il protocollo:
-        [1 byte type] [4 bytre lunghezza (network order)] [data]
-    restituisce 0 in caso di successo, -1 per erroree
-*/
-
-static int send_message(int sockfd, char type, const char *data, unsigned int length)
-{
-    // conversione in network length
-    unsigned int netlen = htonl(length);
-    if (robust_write(sockfd, &type, 1) != 1)
-    {
-        perror("robust_write(type)");
-        return -1;
-    }
-
-    if (robust_write(sockfd, &netlen, 4) != 4)
-    {
-        perror("robust_write(netlen)");
-        return -1;
-    }
-    if (length > 0)
-    {
-        if (robust_write(sockfd, data, length) != (ssize_t)length)
-        {
-            perror("robust_write(data)");
-            return -1;
-        }
-    }
-    return 0;
-}
-
-/*
-    receive_message:
-    riceve un messaggio dal client:
-        [1 byte type] [4 byte lunghezza (network order)] [data]
-    popola i parametri in output cone le informazioni ricevute.
-    ritorna 0 in caso di successo e -1 in caso di fine connessione/errore
-*/
-static int receive_message(int sockfd, char *type, char *data, unsigned int *length)
-{
-    ssize_t n = robust_read(sockfd, type, 1);
-    if (n <= 0)
-    {
-        if (n < 0 && (errno != EAGAIN && errno != EINTR))
-        {
-            perror("robust_read(type)");
-        }
-        return -1;
-    }
-
-    unsigned int netlen;
-    n = robust_read(sockfd, &netlen, 4);
-    if (n <= 0)
-    {
-        if (n < 0 && (errno != EAGAIN && errno != EINTR))
-        {
-            perror("robust_read(netlen)");
-        }
-        return -1;
-    }
-
-    // conversione da network length
-    *length = ntohl(netlen);
-    if (*length > BUFFER_SIZE - 1)
-        *length = BUFFER_SIZE - 1; // troncamento per prevenire overflow
-
-    if (*length > 0)
-    {
-        n = robust_read(sockfd, data, *length);
-        if (n <= 0)
-        {
-            if (n < 0 && (errno != EAGAIN && errno != EINTR))
-            {
-                perror("robust_read(data)");
-            }
-            return -1;
-            ;
-        }
-        data[n] = '\0'; // Aggiungi il carattere di terminazione
-    }
-
-    return 0;
-}
-
 // ======================= logging =======================
 /*
     log_event:
         registra un evento sul file di log con timestamp
         utilizza con mutex per garantire l'accesso esclusivo al file di log
 */
-static void log_event(const char *format, ...)
+void log_event(const char *format, ...)
 {
     if (g_server.log_fp == NULL)
         return;
@@ -379,8 +79,7 @@ static void log_event(const char *format, ...)
         se si raggiunge la fine del fine, il puntatore viene fatto rewind per ciclare le matrici
         ritorna ture se la lettura ha avuto successo, false altrimenti
 */
-
-static bool read_matrix_from_file(char matrix[16][5])
+bool read_matrix_from_file(char matrix[16][5])
 {
     char line[1024];
     if (fgets(line, sizeof(line), g_server.matrix_fp) == NULL)
@@ -432,7 +131,7 @@ static bool read_matrix_from_file(char matrix[16][5])
     signal_handler:
         imposta il flag di stop del server e chiude socket in ascolto per uscire dal loop di accept
 */
-static void signal_handler(int signo)
+void signal_handler(int signo)
 {
     (void)signo;
     log_event("[SYSTEM] Ricevuto SIGINT, avvio shutdown");
@@ -456,7 +155,7 @@ void sigalarm_handler(int signo)
         invia a tutti i client connessi un messaggio di shutdown
         chiudendo forzamente le connessioni
 */
-static void broadcast_server_shutdown()
+void broadcast_server_shutdown()
 {
     pthread_mutex_lock(&g_server.clients_mutex);
 
@@ -505,7 +204,7 @@ void push_score(const char *username, int score)
 }
 
 // Funzione di cleanup per il thread orchestrator
-static void orchestrator_cleanup(void *arg)
+void orchestrator_cleanup(void *arg)
 {
     (void)arg;
     log_event("[ORCHESTRATOR] Terminato");
@@ -522,17 +221,14 @@ static void orchestrator_cleanup(void *arg)
         4) Alla fine, forza l'invio dei punteggi e avvia la fase di pausa.
         5) Ripete il ciclo finché il server non viene fermato.
 */
-static void *orchestrator_thread(void *arg)
+void *orchestrator_thread(void *arg)
 {
     (void)arg;
     // registrazione cleanup handler
     pthread_cleanup_push(orchestrator_cleanup, NULL);
 
     // Abilita la cancellazione (cancellation point)
-    // per permettere di "forzare" la terminazione del thread senza dover attendere che il thread stesso termini,
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-
-    // PTHREAD_CANCEL_DEFERRED permette che la cancellazione avvenga nei punti sicuri
     pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 
     while (!g_server.stop)
@@ -672,6 +368,7 @@ static void *orchestrator_thread(void *arg)
     pthread_cleanup_pop(1);
     return NULL;
 }
+
 // ======================= thread scorer =======================
 /*
     scorer_thread:
@@ -762,6 +459,7 @@ void *scorer_thread(void *arg)
             else
                 offset += snprintf(classifica + offset, sizeof(classifica) - offset, "%s, %d", local_scores[i].username, local_scores[i].score);
         }
+
         // invio classifica
         pthread_mutex_lock(&g_server.clients_mutex);
         for (int i = 0; i < MAX_CLIENTS; i++)
@@ -785,6 +483,7 @@ void *scorer_thread(void *arg)
 
     return NULL;
 }
+
 // ======================= thread client =======================
 /*
     client_thread:
@@ -799,8 +498,7 @@ void *scorer_thread(void *arg)
             + MSG_MATRICE: invia la matrice corrente.
     - Se la ricezione fallisce (incluso il timeout per inattività), il client viene disconnesso e loggato.
 */
-
-static void *client_thread(void *arg)
+void *client_thread(void *arg)
 {
     // Abilita la cancellazione
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -1089,7 +787,7 @@ static void *client_thread(void *arg)
                     }
 
                     // Costruisce una stringa CSV: primo campo il tempo di default, secondo il tempo rimanente
-                    char csv_str[64];
+                    char csv_str[128];
                     snprintf(csv_str, sizeof(csv_str), "pausa di %d secondi, e l'inizio della nuova partita tra %d", g_server.break_time, remaining_break);
                     send_message(sockfd, MSG_MATRICE, csv_str, strlen(csv_str) + 1);
                 }
@@ -1264,7 +962,7 @@ static void *client_thread(void *arg)
                 }
 
                 // Costruisce una stringa CSV: primo campo il tempo di default, secondo il tempo rimanente
-                char csv_str[64];
+                char csv_str[128];
                 snprintf(csv_str, sizeof(csv_str), "pausa di %d secondi, e l'inizio della nuova partita tra %d", g_server.break_time, remaining_break);
                 send_message(sockfd, MSG_MATRICE, csv_str, strlen(csv_str) + 1);
             }
@@ -1371,7 +1069,6 @@ static void *client_thread(void *arg)
         - apertura file di log
         - crea e configura il socket in ascolto
 */
-
 int server_init(
     int port,
     int game_duration_sec,
@@ -1604,7 +1301,6 @@ int server_run()
             + attende la termionazione del thread orch.
             + libera risorse
 */
-
 void server_shutdown()
 {
     static bool shutdown_in_progress = false;
@@ -1685,6 +1381,7 @@ void server_shutdown()
     if (g_server.matrix_filename)
         free(g_server.matrix_filename);
 }
+
 /*
    server_set_name:
    Imposta il nome del server. Viene utilizzato per i messaggi di log.
