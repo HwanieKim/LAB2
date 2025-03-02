@@ -13,7 +13,7 @@ client_paroliere.c
 volatile sig_atomic_t shutdown_flag = 0;
 
 // mutex per sincronizzazione
-pthread_mutex_t output_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t client_console_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
      normalize_word:
@@ -117,7 +117,7 @@ void *client_receiver(void *arg)
             shutdown_flag = 1;
             break;
         }
-        pthread_mutex_lock(&output_mutex);
+        pthread_mutex_lock(&client_console_mutex);
 
         // \r\33[2K: spostare il cursore all'inizio e cancellare la riga corrente in console
         printf("\r\33[2K");
@@ -189,7 +189,7 @@ void *client_receiver(void *arg)
         }
         printf("[PROMPT PAROLIERE]--> ");
         fflush(stdout);
-        pthread_mutex_unlock(&output_mutex);
+        pthread_mutex_unlock(&client_console_mutex);
     }
     return NULL;
 }
@@ -200,7 +200,7 @@ void *client_receiver(void *arg)
 */
 void print_help()
 {
-    pthread_mutex_lock(&output_mutex);
+    pthread_mutex_lock(&client_console_mutex);
     printf("Comandi disponibili:\n");
     printf("  aiuto                         - Mostra l'elenco dei comandi\n");
     printf("  registra_utente <nome>        - Registra un nuovo utente\n");
@@ -212,7 +212,7 @@ void print_help()
     printf("  show-msg                      - Visualizza il contenuto della bacheca\n");
     printf("  fine                          - Termina la sessione\n");
     fflush(stdout);
-    pthread_mutex_unlock(&output_mutex);
+    pthread_mutex_unlock(&client_console_mutex);
 }
 
 /*
@@ -233,10 +233,10 @@ void client_run(int sockfd)
     }
 
     // Stampa il prompt iniziale
-    pthread_mutex_lock(&output_mutex);
+    pthread_mutex_lock(&client_console_mutex);
     printf("[PROMPT PAROLIERE]--> ");
     fflush(stdout);
-    pthread_mutex_unlock(&output_mutex);
+    pthread_mutex_unlock(&client_console_mutex);
 
     print_help();
 
@@ -245,10 +245,10 @@ void client_run(int sockfd)
     while (!shutdown_flag)
     {
         // Ripristina il prompt all'inizio di ogni iterazione
-        pthread_mutex_lock(&output_mutex);
+        pthread_mutex_lock(&client_console_mutex);
         printf("[PROMPT PAROLIERE]--> ");
         fflush(stdout);
-        pthread_mutex_unlock(&output_mutex);
+        pthread_mutex_unlock(&client_console_mutex);
 
         // lettura l'input dal console
         if (fgets(input, sizeof(input), stdin) == NULL)
