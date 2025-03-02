@@ -24,7 +24,7 @@ pthread_mutex_t ranking_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t ranking_cond = PTHREAD_COND_INITIALIZER;
 
 // Definizione e inizializzazione di un mutex globale per l'output della console
-pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t server_console_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
     safe_printf:
@@ -33,11 +33,11 @@ pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
 void safe_printf(const char *format, ...)
 {
     va_list args;
-    pthread_mutex_lock(&console_mutex);
+    pthread_mutex_lock(&server_console_mutex);
     va_start(args, format);
     vprintf(format, args);
     va_end(args);
-    pthread_mutex_unlock(&console_mutex);
+    pthread_mutex_unlock(&server_console_mutex);
 }
 
 // ======================= logging =======================
@@ -131,7 +131,7 @@ bool read_matrix_from_file(char matrix[16][5])
     signal_handler:
         imposta il flag di stop del server e chiude socket in ascolto per uscire dal loop di accept
 */
-void signal_handler(int signo)
+void sigint_handler(int signo)
 {
     (void)signo;
     log_event("[SYSTEM] Ricevuto SIGINT, avvio shutdown");
@@ -164,7 +164,7 @@ void broadcast_server_shutdown()
         if (g_server.clients[i].connected)
 
         {
-            // Forza la chiusura delle operazioni I/O sul socket
+            // blocca le successive comunicazioni, != chiusura(eliminazione) socket
             shutdown(g_server.clients[i].sockfd, SHUT_RDWR);
             send_message(g_server.clients[i].sockfd, MSG_SERVER_SHUTDOWN, "Server shutdown", strlen("Server shutdown") + 1);
             close(g_server.clients[i].sockfd);
@@ -270,6 +270,17 @@ void *orchestrator_thread(void *arg)
                 g_server.clients[i].score = 0;
                 g_server.clients[i].used_words_count = 0;
                 g_server.clients[i].score_sent = false;
+            }
+        }
+        pthread_mutex_unlock(&g_server.clients_mutex);
+
+        // Invia notifica di inizio partita a tutti i client
+        pthread_mutex_lock(&g_server.clients_mutex);
+        for (int i = 0; i < MAX_CLIENTS; i++)
+        {
+            if (g_server.clients[i].connected)
+            {
+                send_message(g_server.clients[i].sockfd, MSG_OK, "Nuova partita iniziata", strlen("Nuova partita iniziata") + 1);
             }
         }
         pthread_mutex_unlock(&g_server.clients_mutex);
@@ -573,13 +584,16 @@ void *client_thread(void *arg)
             {
                 send_message(sockfd, MSG_SERVER_SHUTDOWN, "Disconnessione per inattivita'", 30);
                 log_event("[CLIENT] Timeout di inattivita' per il client %s", g_server.clients[idx].username);
-                break;
+            }
+            else if (errno = ENOTCONN)
+            {
+                log_event("[CLIENT] Errore nella connessione con il client %s", g_server.clients[idx].username);
             }
             else
             {
-                log_event("[CLIENT] Errore nella ricezione per il client %s", g_server.clients[idx].username);
-                break;
+                log_event("[CLIENT] errore nella comunicazione: %s", strerror(errno));
             }
+            break;
         }
         else
         {
@@ -636,7 +650,7 @@ void *client_thread(void *arg)
             // Cerca utente esistente(anche cancellato)
             for (int i = 0; i < g_server.registered_count; i++)
             {
-                if (strcasecmp(g_server.registered_users[i].username, data) == 0)
+                if (strcmp(g_server.registered_users[i].username, data) == 0)
                 {
                     existing_index = i;
                     break;
@@ -1046,6 +1060,8 @@ void *client_thread(void *arg)
         log_event("[CLIENT] Punteggio finale inviato per %s", g_server.clients[idx].username);
     }
 
+    log_event("[SERVER] connessione terminata con %s", g_server.clients[idx].username);
+
     // chiusura socket, aggiornamento dello stato del client
     close(sockfd);
     pthread_mutex_lock(&g_server.clients_mutex);
@@ -1078,8 +1094,17 @@ int server_init(
     int seed,
     int disconnect_timeout_sec)
 {
-    // Ignora SIGPIPE per evitare crash quando i client chiudono inaspettatamente
-    signal(SIGPIPE, SIG_IGN);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    // Ignora SIGPIPE per evitare severe crash quando i client chiudono inaspettatamente
+    sa.sa_handler = SIG_IGN; // ignora il segnale
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGPIPE, &sa, NULL) == -1)
+    {
+        perror("sigaction");
+        exit(1);
+    }
 
     // inizializzazione parametri
     memset(&g_server, 0, sizeof(g_server));
@@ -1147,11 +1172,6 @@ int server_init(
         log_event("[SYSTEM] Matrice generata casualmente (seed=%u)", effective_seed);
     }
 
-    if (g_server.matrix_fp)
-    {
-        rewind(g_server.matrix_fp);
-    }
-
     // creazione del socket in ascolto
     g_server.server_sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_server.server_sockfd < 0)
@@ -1200,7 +1220,7 @@ int server_run()
     // impostazione gestor di SIGIN per shutdown ordinato
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler;
+    sa.sa_handler = sigint_handler;
     sigaction(SIGINT, &sa, NULL);
     log_event("[SYSTEM] Gestore SIGINT impostato");
 
@@ -1326,13 +1346,6 @@ void server_shutdown()
     close(g_server.server_sockfd);
     log_event("[SYSTEM] Socket in ascolto chiuso");
 
-    // cancella e unisci il thread orchestrator, cancel e join per evitare creazione thread zombie
-    // forza l'uscita (cancel)
-    pthread_cancel(g_server.orchestrator_thread_id);
-    // attesa  terminazione effettiva (join)
-    pthread_join(g_server.orchestrator_thread_id, NULL);
-    log_event("[SYSTEM] Thread orchestrator terminato");
-
     // libera il dizionario
     if (g_server.dictionary)
     {
@@ -1340,13 +1353,16 @@ void server_shutdown()
         g_server.dictionary = NULL;
     }
 
-    // cancella e unisce i thread client
+    // cancel e join per evitare creazione thread zombie
     pthread_mutex_lock(&g_server.clients_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
         if (g_server.clients[i].connected)
         {
+
+            // forza l'uscita (cancel)
             pthread_cancel(g_server.clients[i].thread_id);
+            // attesa  terminazione effettiva (join)
             pthread_join(g_server.clients[i].thread_id, NULL);
             log_event("[SYSTEM] Thread client in slot %d terminato", i);
         }
@@ -1356,6 +1372,10 @@ void server_shutdown()
     pthread_cancel(g_server.scorer_thread_id);
     pthread_join(g_server.scorer_thread_id, NULL);
     log_event("[SYSTEM] Thread scorer terminato");
+
+    pthread_cancel(g_server.orchestrator_thread_id);
+    pthread_join(g_server.orchestrator_thread_id, NULL);
+    log_event("[SYSTEM] Thread orchestrator terminato");
 
     safe_printf("[SERVER] Shutdown completato.\n");
     log_event("[SYSTEM] Shutdown completato");
