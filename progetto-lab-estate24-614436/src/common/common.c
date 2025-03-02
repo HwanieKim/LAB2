@@ -70,9 +70,18 @@ int send_message(int sockfd, char type, const char *data, unsigned int length)
     }
     if (length > 0)
     {
-        if (robust_write(sockfd, data, length) != (ssize_t)length)
+        ssize_t bytes_written = robust_write(sockfd, data, length);
+        if (bytes_written != (ssize_t)length)
         {
-            perror("robust_write(data)");
+            if (bytes_written == -1 && errno == EPIPE)
+            {
+                // Il client ha chiuso la connessione
+                fprintf(stderr, "[SERVER] connessione con client terminato (EPIPE)\n");
+            }
+            else
+            {
+                perror("robust_write(data)");
+            }
             return -1;
         }
     }
