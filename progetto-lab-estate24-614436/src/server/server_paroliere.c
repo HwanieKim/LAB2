@@ -315,13 +315,12 @@ void *orchestrator_thread(void *arg)
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
             if (g_server.clients[i].connected &&
-                g_server.clients[i].username[0] != '\0' &&
-                g_server.clients[i].in_game)
+                g_server.clients[i].username[0] != '\0')
             {
                 count_connected++;
             }
         }
-        log_event("[ORCHESTRATOR] Fine partita, %d client loggati", count_connected);
+        log_event("[ORCHESTRATOR] Fine partita, %d client connessi", count_connected);
         pthread_mutex_unlock(&g_server.clients_mutex);
 
         // Quando la partita termina, invia il segnale SIGALRM a tutti i thread client per "svegliarli":
@@ -356,25 +355,35 @@ void *orchestrator_thread(void *arg)
         g_score_queue.expected = count_connected;
         pthread_mutex_unlock(&score_queue_mutex);
 
-        // Aspetta che la classifica sia stata inviata
-        pthread_mutex_lock(&ranking_mutex);
-        while (!ranking_sent)
+        if (count_connected == 0)
         {
-            if (g_server.stop)
-                break;
-
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_sec += 1; // timeout di 1 secondo
-            int ret = pthread_cond_timedwait(&ranking_cond, &ranking_mutex, &ts);
-            (void)ret;
-            pthread_testcancel();
-            if (g_server.stop)
-                break;
+            log_event("[ORCHESTRATOR] Nessun client connesso, salto invio classifica.");
+            pthread_mutex_lock(&ranking_mutex);
+            ranking_sent = true;
+            pthread_cond_signal(&ranking_cond);
+            pthread_mutex_unlock(&ranking_mutex);
         }
-        ranking_sent = false;
-        pthread_mutex_unlock(&ranking_mutex);
+        else
+        {
+            // Aspetta che la classifica sia stata inviata
+            pthread_mutex_lock(&ranking_mutex);
+            while (!ranking_sent)
+            {
+                if (g_server.stop)
+                    break;
 
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += 1; // timeout di 1 secondo
+                int ret = pthread_cond_timedwait(&ranking_cond, &ranking_mutex, &ts);
+                (void)ret;
+                pthread_testcancel();
+                if (g_server.stop)
+                    break;
+            }
+            ranking_sent = false;
+            pthread_mutex_unlock(&ranking_mutex);
+        }
         // imposta il tempo di inizio della pausa
         g_server.break_start_time = time(NULL);
 
@@ -1089,8 +1098,16 @@ void *client_thread(void *arg)
         g_server.clients[idx].score_sent = true;
         log_event("[CLIENT] Punteggio finale inviato per %s", g_server.clients[idx].username);
     }
-
-    log_event("[SERVER] connessione terminata con %s", g_server.clients[idx].username);
+    if (g_server.clients[idx].username && g_server.clients[idx].username[0] != '\0')
+    {
+        log_event("[SERVER] connessione terminata con utente: %s", g_server.clients[idx].username);
+        safe_printf("[SERVER] connessione terminata con utente: %s\n", g_server.clients[idx].username);
+    }
+    else
+    {
+        log_event("[SERVER] connessione terminata con client collegato con socket %d", g_server.clients[idx].sockfd);
+        safe_printf("[SERVER] connessione terminata con client collegato con socket %d\n", g_server.clients[idx].sockfd);
+    }
     // chiusura socket, aggiornamento dello stato del client
     close(sockfd);
 
