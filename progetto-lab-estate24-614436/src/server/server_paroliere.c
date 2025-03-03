@@ -270,17 +270,28 @@ void *orchestrator_thread(void *arg)
                 g_server.clients[i].score = 0;
                 g_server.clients[i].used_words_count = 0;
                 g_server.clients[i].score_sent = false;
+                g_server.clients[i].in_game = true;
             }
         }
         pthread_mutex_unlock(&g_server.clients_mutex);
 
         // Invia notifica di inizio partita a tutti i client
         pthread_mutex_lock(&g_server.clients_mutex);
+        char matrix_buf[BUFFER_SIZE] = "";
+        for (int i = 0; i < 16; i++)
+        {
+            strcat(matrix_buf, g_server.matrix[i]);
+            if (i < 15)
+            {
+                strcat(matrix_buf, " ");
+            }
+        }
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            if (g_server.clients[i].connected)
+            if (g_server.clients[i].connected && g_server.clients[i].username[0] != '\0')
             {
                 send_message(g_server.clients[i].sockfd, MSG_OK, "Nuova partita iniziata", strlen("Nuova partita iniziata") + 1);
+                send_message(g_server.clients[i].sockfd, MSG_MATRICE, matrix_buf, strlen(matrix_buf) + 1);
             }
         }
         pthread_mutex_unlock(&g_server.clients_mutex);
@@ -303,7 +314,9 @@ void *orchestrator_thread(void *arg)
         int count_connected = 0;
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            if (g_server.clients[i].connected && g_server.clients[i].username[0] != '\0')
+            if (g_server.clients[i].connected &&
+                g_server.clients[i].username[0] != '\0' &&
+                g_server.clients[i].in_game)
             {
                 count_connected++;
             }
@@ -329,7 +342,7 @@ void *orchestrator_thread(void *arg)
         pthread_mutex_lock(&g_server.clients_mutex);
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            if (g_server.clients[i].connected && !g_server.clients[i].score_sent)
+            if (g_server.clients[i].connected && !g_server.clients[i].score_sent && g_server.clients[i].in_game)
             {
                 push_score(g_server.clients[i].username, g_server.clients[i].score);
                 g_server.clients[i].score_sent = true;
@@ -463,6 +476,13 @@ void *scorer_thread(void *arg)
         // costruzione della stringa per classifica
         char classifica[BUFFER_SIZE] = "";
         int offset = 0;
+
+        if (n > 0)
+        {
+            // Il vincitore è il primo (dopo l'ordinamento decrescente)
+            offset += snprintf(classifica + offset, sizeof(classifica) - offset, "Vincitore: %s\n", local_scores[0].username);
+        }
+
         for (int i = 0; i < n; i++)
         {
             if (i < n - 1)
@@ -475,9 +495,10 @@ void *scorer_thread(void *arg)
         pthread_mutex_lock(&g_server.clients_mutex);
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            if (g_server.clients[i].connected)
+            if (g_server.clients[i].connected && g_server.clients[i].in_game)
             {
                 send_message(g_server.clients[i].sockfd, MSG_PUNTI_FINALI, classifica, strlen(classifica) + 1);
+                g_server.clients[i].in_game = false;
             }
         }
         pthread_mutex_unlock(&g_server.clients_mutex);
@@ -770,11 +791,15 @@ void *client_thread(void *arg)
             }
             else
             {
-                strncpy(g_server.clients[idx].username, data, USERNAME_LEN - 1); // Login corretto
+                // login corretto
+                strncpy(g_server.clients[idx].username, data, USERNAME_LEN - 1);
+                g_server.clients[idx].username[USERNAME_LEN - 1] = '\0';
                 send_message(sockfd, MSG_OK, "Login effettuato", 17);
                 log_event("[CLIENT] Login effettuato con succeso, utente %s", data);
+
                 if (g_server.game_running)
                 {
+                    g_server.clients[idx].in_game = true;
                     // invio matrice
                     char matrix_buf[BUFFER_SIZE] = "";
                     for (int i = 0; i < 16; i++)
@@ -793,6 +818,10 @@ void *client_thread(void *arg)
                 }
                 else
                 {
+                    g_server.clients[idx].score = 0;
+                    g_server.clients[idx].used_words_count = 0;
+                    g_server.clients[idx].score_sent = false;
+                    g_server.clients[idx].in_game = false;
                     // invio tempo attesa
                     int remaining_break = g_server.break_time - (int)difftime(time(NULL), g_server.break_start_time);
                     if (remaining_break < 0)
