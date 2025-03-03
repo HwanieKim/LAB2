@@ -548,19 +548,20 @@ void *client_thread(void *arg)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigalarm_handler;
-
-    // reset di sig
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-
     sigaction(SIGALRM, &sa, NULL);
 
     // impostazione timeout di ricezione sul socket, gestione client inattivi
     struct timeval timeout;
     timeout.tv_sec = g_server.disconnect_timeout;
     timeout.tv_usec = 0;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) < 0)
+    {
+        log_event("[CLIENT] setsockopt fallito: %s", strerror(errno));
+        close(sockfd);
+        pthread_exit(NULL);
+    }
     time_t last_activity = time(NULL);
 
     // buffer per messaggi
@@ -606,7 +607,7 @@ void *client_thread(void *arg)
                 send_message(sockfd, MSG_SERVER_SHUTDOWN, "Disconnessione per inattivita'", 30);
                 log_event("[CLIENT] Timeout di inattivita' per il client %s", g_server.clients[idx].username);
             }
-            else if (errno = ENOTCONN)
+            else if (errno == ENOTCONN)
             {
                 log_event("[CLIENT] Errore nella connessione con il client %s", g_server.clients[idx].username);
             }
@@ -1090,9 +1091,9 @@ void *client_thread(void *arg)
     }
 
     log_event("[SERVER] connessione terminata con %s", g_server.clients[idx].username);
-
     // chiusura socket, aggiornamento dello stato del client
     close(sockfd);
+
     pthread_mutex_lock(&g_server.clients_mutex);
     g_server.clients[idx].connected = false;
     g_server.clients[idx].username[0] = '\0';
@@ -1131,11 +1132,11 @@ int server_init(
     sa.sa_flags = 0;
     if (sigaction(SIGPIPE, &sa, NULL) == -1)
     {
-        perror("sigaction");
-        exit(1);
+        perror("sigaction SIGPIPE");
+        exit(EXIT_FAILURE);
     }
 
-    // inizializzazione parametri
+    // reset g_server, inizializzazione parametri
     memset(&g_server, 0, sizeof(g_server));
     g_server.port = port;
     g_server.game_duration = game_duration_sec;
@@ -1144,24 +1145,23 @@ int server_init(
     g_server.game_running = false;
     g_server.seed = seed;
 
+    // impostazione timeout di disconnessione per inattivita'
+    g_server.disconnect_timeout = disconnect_timeout_sec;
+
     // inizializzazione mutex
     pthread_mutex_init(&g_server.clients_mutex, NULL);
     pthread_mutex_init(&g_server.registered_mutex, NULL);
     pthread_mutex_init(&g_server.log_mutex, NULL);
-
-    // impostazione timeout di disconnessione per inattivita'
-    g_server.disconnect_timeout = disconnect_timeout_sec;
 
     // apertura file di log in modalita' append
     g_server.log_fp = fopen("paroliere.log", "a");
     if (g_server.log_fp == NULL)
     {
         perror("fopen log");
+        exit(EXIT_FAILURE);
     }
-    else
-    {
-        log_event("[SYSTEM] File di log aperto");
-    }
+    log_event("[SYSTEM] File di log aperto");
+
     // caricamento il dizionario nel trie
     if (dict_file == NULL)
     {
@@ -1211,7 +1211,12 @@ int server_init(
 
     // abilita il riuso dell'indirizzo
     int opt_value = 1;
-    setsockopt(g_server.server_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt_value, sizeof(opt_value));
+    if (setsockopt(g_server.server_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt_value, sizeof(opt_value)) < 0)
+    {
+        perror("setsockopt SO_REUSEADDR");
+        close(g_server.server_sockfd);
+        return -1;
+    }
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));

@@ -15,7 +15,9 @@ ssize_t robust_write(int fd, const void *buf, size_t count)
         if (written < 0)
         {
             if (errno == EINTR)
-                continue;
+                continue; //riprova
+            //altri error
+            fprintf(stderr, "robust_write error: %s\n", strerror(errno));
             return -1;
         }
         total_written += written;
@@ -38,10 +40,12 @@ ssize_t robust_read(int fd, void *buf, size_t count)
         {
             if (errno == EINTR)
                 continue;
+            //altri errori
+            fprintf(stderr, "robust_read error: %s\n", strerror(errno));
             return -1;
         }
         if (r == 0)
-            break; // fine flusso
+            break; // EOF
         total_read += r;
     }
     return total_read;
@@ -68,22 +72,8 @@ int send_message(int sockfd, char type, const char *data, unsigned int length)
         perror("robust_write(netlen)");
         return -1;
     }
-    if (length > 0)
-    {
-        ssize_t bytes_written = robust_write(sockfd, data, length);
-        if (bytes_written != (ssize_t)length)
-        {
-            if (bytes_written == -1 && errno == EPIPE)
-            {
-                // Il client ha chiuso la connessione
-                fprintf(stderr, "[SERVER] connessione con client terminato (EPIPE)\n");
-            }
-            else
-            {
-                perror("robust_write(data)");
-            }
-            return -1;
-        }
+    if (length > 0 && robust_write(sockfd, data, length) != length) {
+        return -1;
     }
     return 0;
 }
@@ -120,23 +110,12 @@ int receive_message(int sockfd, char *type, char *data, unsigned int *length)
 
     // conversione da network length
     *length = ntohl(netlen);
-    if (*length > BUFFER_SIZE - 1)
-        *length = BUFFER_SIZE - 1; // troncamento per prevenire overflow
-
     if (*length > 0)
     {
-        n = robust_read(sockfd, data, *length);
-        if (n <= 0)
+        if (robust_read(sockfd, data, *length) != *length)
         {
-            if (n < 0 && (errno != EAGAIN && errno != EINTR))
-            {
-                perror("robust_read(data)");
-            }
             return -1;
-            ;
         }
-        data[n] = '\0'; // Aggiungi il carattere di terminazione
     }
-
     return 0;
 }
