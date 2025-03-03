@@ -68,6 +68,7 @@ typedef struct
     bool score_sent;
     pthread_t thread_id;
 
+    bool in_game;
 } client_info;
 
 // struttura per gestione registrazion utenti
