@@ -15,8 +15,8 @@ ssize_t robust_write(int fd, const void *buf, size_t count)
         if (written < 0)
         {
             if (errno == EINTR)
-                continue; //riprova
-            //altri error
+                continue; // riprova
+            // altri error
             fprintf(stderr, "robust_write error: %s\n", strerror(errno));
             return -1;
         }
@@ -40,7 +40,7 @@ ssize_t robust_read(int fd, void *buf, size_t count)
         {
             if (errno == EINTR)
                 continue;
-            //altri errori
+            // altri errori
             fprintf(stderr, "robust_read error: %s\n", strerror(errno));
             return -1;
         }
@@ -72,7 +72,8 @@ int send_message(int sockfd, char type, const char *data, unsigned int length)
         perror("robust_write(netlen)");
         return -1;
     }
-    if (length > 0 && robust_write(sockfd, data, length) != length) {
+    if (length > 0 && robust_write(sockfd, data, length) != length)
+    {
         return -1;
     }
     return 0;

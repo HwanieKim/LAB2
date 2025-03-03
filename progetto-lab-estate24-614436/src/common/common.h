@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ctype.h>
+#include <string.h>
 
 #define BUFFER_SIZE 512
 
