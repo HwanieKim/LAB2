@@ -1,6 +1,14 @@
 #include "common.h"
 
 // ======================= Funzioni di comunicazione =======================
+
+/*
+    si assume che:
+        - fd sia un file descriptor valido
+        - buf punti a un'area di memoria sufficientemente allocata
+        - count rappresenti il numero corretto di byte da scrivere/leggere
+*/
+
 /*
     robust_write:
         scrive 'count' byte sul descrittore fd, ripetendo in caso di interruzioni

@@ -20,7 +20,7 @@ void generate_matrix(char matrix[16][5], unsigned int seed)
 
 int count_letters(const char *word)
 {
-    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
+
     int count = 0;
     for (int i = 0; word[i]; i++)
     {
@@ -40,9 +40,14 @@ int count_letters(const char *word)
     return count;
 }
 
+/*
+    tokenize_word:
+        Tokenizza una parola in modo che 'qu' diventi un singolo token.
+        Si assume che 'word' sia una stringa valida terminata da '\0'.
+        Restituisce il numero di token trovati.
+ */
 int tokenize_word(const char *word, char tokens[][3])
 {
-    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     int tcount = 0;
     int i = 0;
     while (word[i])
@@ -77,6 +82,13 @@ int tokenize_word(const char *word, char tokens[][3])
         - Altrimenti, se pos è l’ultimo token, restituisce true.
         - Altrimenti prova ad andare in tutte le 8 direzioni (verticali, orizzontali, diagonali).
         - Usa l’array visted[] per non riusare la stessa cella più di una volta nella parola.
+
+    si assume che:
+        - matrix sia una matrice 4x4 di stringhe valide
+        - tokens sia un array di token validi
+        - pos sia l'indice del token corrente
+        - total sia il numero totale di token
+        - index sia l'indice della cella corrente
  */
 bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, int index, bool visted[16])
 {
@@ -141,26 +153,24 @@ bool dfs_find(char matrix[16][5], char tokens[][3], int pos, int total, int inde
  */
 bool is_word_in_matrix(char matrix[16][5], const char *word)
 {
-    // TODO: Stessi controlli di prima, world_len, word != NULL, ecc.
     char tokens[32][3];
     memset(tokens, 0, sizeof(tokens));
     int tcount = tokenize_word(word, tokens);
+    bool visted[16] = {false};
+
+    if (word == NULL || strlen(word) == 0)
+    {
+        return false;
+    }
 
     // controlla almeno 4 lettere
     if (tcount < 4)
     {
         return false;
     }
-    bool visted[16] = {false};
-
     // dfs partendo da ognuno dei 16 slot
     for (int i = 0; i < 16; i++)
     {
-        // reset visted
-        for (int j = 0; j < 16; j++)
-        {
-            visted[j] = false;
-        }
         if (dfs_find(matrix, tokens, 0, tcount, i, visted))
         {
             return true; // parola trovata

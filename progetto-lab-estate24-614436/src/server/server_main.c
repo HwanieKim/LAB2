@@ -19,6 +19,12 @@ sintassi: Sintassi:
        (se non specificato, usa time(NULL)).
      - --diz <dizionario>: percorso file dizionario (default: "dictionary.txt").
      - --disconnetti-dopo <minuti>: tempo di inattività prima di disconnettere un client (default: 3 minuti).
+
+    si assume che:
+        - argv sia un array di stringhe non NULL
+        - argv[0] contenga il nome dell'eseguibile
+        - argv[1] contenga il nome del server
+        - argv[2] contenga la porta del server
 */
 
 #include "server.h"

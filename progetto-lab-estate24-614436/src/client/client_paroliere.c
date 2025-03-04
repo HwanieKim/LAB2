@@ -21,6 +21,11 @@ pthread_mutex_t client_console_mutex = PTHREAD_MUTEX_INITIALIZER;
             se incontra 'q' seguito da 'u', li aggiunge entrambi come "qu";
             se trova una 'q' non seguita da 'u', la ignora (da definizione nel codice).
         Tale strategia rende coerente l’invio della parola al server.
+
+    si assume che:
+        - word sia un puntatotre non nullo ad una stringa terminata da '\0'
+        - word_len sia la lunghezza effettiva della stringa (se < 0, calcolata con strlen)
+        - il buffer di destinazione sia sufficientemente grande per contenere la stringa normalizzata
  */
 void normalize_word(char *word, int word_len)
 {
@@ -61,6 +66,9 @@ void normalize_word(char *word, int word_len)
             non superi 10 caratteri
             sia composta da caratteri alfanumerici
             non vuota
+    si assume che:
+        - nome sia un puntatore non nullo ad una stringa terminata da '\0'
+        - nome_len sia la lunghezza effettiva della stringa (se < 0, calcolata con strlen)
 */
 bool valida_nome_utente(const char *nome, int nome_len)
 {
@@ -82,8 +90,11 @@ bool valida_nome_utente(const char *nome, int nome_len)
          - legge i messaggi usando receive_message
          - li interpreta e li stampa
          - in caso di erroe o di messaggio di shutdown, shutdown_flag = 1
+
+    si assume che:
+        - arg sia un puntatore ad un intero che rappresenta il socket di connessione
+        - il socket deve essere correttamente configurato per la ricezione dei messaggi
     */
-// thread di ricezione, riceve continuamente messaggi dal server e li stampa
 void *client_receiver(void *arg)
 {
     int sockfd = *(int *)arg;
@@ -221,6 +232,9 @@ funzione principale della logica di client
         Crea il thread di ricezione messaggi dal server (client_receiver).
         Gestisce la lettura dei comandi da stdin e la loro formattazione verso il server.
         In caso di comando "fine", chiude la connessione e aspetta la terminazione del thread.
+
+    si assume che:
+        - sockfd sia un socket di connessione correttamente configurato e collegato al server
  */
 void client_run(int sockfd)
 {

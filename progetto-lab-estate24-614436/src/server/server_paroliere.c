@@ -29,6 +29,9 @@ pthread_mutex_t server_console_mutex = PTHREAD_MUTEX_INITIALIZER;
 /*
     safe_printf:
         funzione thread-safe per scrivere su console, sincronizzazione dell'accesso tramite mutex dedicato
+    si assume che:
+        - format sia una stringa di formato corretta
+        - gli argomenti siano corretti
 */
 void safe_printf(const char *format, ...)
 {
@@ -45,6 +48,11 @@ void safe_printf(const char *format, ...)
     log_event:
         registra un evento sul file di log con timestamp
         utilizza con mutex per garantire l'accesso esclusivo al file di log
+
+    si assume che:
+        - format sia una stringa di formato corretta
+        - gli argomenti siano corretti
+        - il file di log sia aperto e valido
 */
 void log_event(const char *format, ...)
 {
@@ -78,6 +86,10 @@ void log_event(const char *format, ...)
         se e' specificato un file di matrici, legge una riga e ne estrae 16 token (celle), separati da spazi o tab.
         se si raggiunge la fine del fine, il puntatore viene fatto rewind per ciclare le matrici
         ritorna ture se la lettura ha avuto successo, false altrimenti
+
+    si assume che:
+        - il file sia aperto e valido e abbia il formato atteso
+        - la matrice sia un array bidimensionale 16x5, dove ogni riga contiene un token di 4 caratteri + terminatore
 */
 bool read_matrix_from_file(char matrix[16][5])
 {
@@ -129,7 +141,9 @@ bool read_matrix_from_file(char matrix[16][5])
 // ======================= gestione SIGINT =======================
 /*
     signal_handler:
-        imposta il flag di stop del server e chiude socket in ascolto per uscire dal loop di accept
+        handlere per SIGINT che imposta il flag di stop del server e chiude socket in ascolto per uscire dal loop di accept
+    si assume che:
+        - il segnale passato sia gestito correttamente.
 */
 void sigint_handler(int signo)
 {
@@ -141,6 +155,9 @@ void sigint_handler(int signo)
 /*
     sigalarm_handler:
         handler vuoto per SIGALRM, viene usato solo per interrompere temporaneamente la read bloccante nel client_thread
+    si assume che:
+        - il segnale passato sia gestito correttamente
+        - il segnale venga usato solo per interrompere la read bloccante
 */
 void sigalarm_handler(int signo)
 {
@@ -152,8 +169,11 @@ void sigalarm_handler(int signo)
 // ======================= broadcast di shutdown =======================
 /*
     broadcast_server_shutdown:
-        invia a tutti i client connessi un messaggio di shutdown
-        chiudendo forzamente le connessioni
+        invia a tutti i client connessi un messaggio di shutdown bloccando forzamente further comunicazioni
+
+    si assume che:
+        - la struttura g_server.clients sia correttamente inizializzata
+        - i client siano connessi e abbiano un socket valido
 */
 void broadcast_server_shutdown()
 {
@@ -181,8 +201,13 @@ void broadcast_server_shutdown()
 // ======================= push_score =======================
 /*
     push_score:
-    Aggiunge il punteggio di un utente alla coda dei punteggi se l'username non è vuoto.
-    viene chiamata quando la partita termina o quando il client invia manualmente il proprio score (se non l'ha gia' fatto)
+        Aggiunge il punteggio di un utente alla coda dei punteggi se l'username non è vuoto.
+        viene chiamata quando la partita termina o quando il client invia manualmente il proprio score (se non l'ha gia' fatto)
+
+    si assume che:
+        - l'username sia una stringa valida
+        - il punteggio sia un intero valido
+        - la coda dei punteggi sia correttamente inizializzata
 */
 void push_score(const char *username, int score)
 {
@@ -204,6 +229,10 @@ void push_score(const char *username, int score)
 }
 
 // Funzione di cleanup per il thread orchestrator
+/*
+    si assume che:
+        - arg sia NULL
+*/
 void orchestrator_cleanup(void *arg)
 {
     (void)arg;
@@ -220,6 +249,9 @@ void orchestrator_cleanup(void *arg)
         3) Attende la durata configurata per la partita.
         4) Alla fine, forza l'invio dei punteggi e avvia la fase di pausa.
         5) Ripete il ciclo finché il server non viene fermato.
+
+    si assume che:
+        - la struttura g_server e i variabili globali sia correttamente inizializzata
 */
 void *orchestrator_thread(void *arg)
 {
@@ -415,6 +447,11 @@ void *orchestrator_thread(void *arg)
         - registra l'evento nel file di log
         - si ripete per ogni partita, azzerando la coda dei punteggi per la partita successiva
         - termina solo quando il server viene arrestato
+
+    si assume che:
+        - la coda dei punteggi sia correttamente inizializzata
+        - la condition variable sia correttamente inizializzata
+        - la struttura g_server sia correttamente inizializzata
 */
 void *scorer_thread(void *arg)
 {
@@ -538,6 +575,10 @@ void *scorer_thread(void *arg)
                       e logga l'evento; se la parola era già proposta, restituisce 0 punti.
             + MSG_MATRICE: invia la matrice corrente.
     - Se la ricezione fallisce (incluso il timeout per inattività), il client viene disconnesso e loggato.
+
+    si assume che:
+        - arg sia un puntatore ad un intero che rappresenta l'indice del client nella struttura g_server.clients
+        - il socket sia correttamente configurato per la ricezione dei messaggi
 */
 void *client_thread(void *arg)
 {
@@ -1131,6 +1172,10 @@ void *client_thread(void *arg)
         - generazione matrice iniziale
         - apertura file di log
         - crea e configura il socket in ascolto
+
+    si assume che:
+        - il server non sia gia' inizializzato
+        - i parametri passati (port, game_duration_sec, break_time_sec, dict_file, matrix_file, seed, disconnect_timeout_sec) siano validi e nel formato corretto
 */
 int server_init(
     int port,
@@ -1265,6 +1310,11 @@ int server_init(
         per ogni nuova connessione:
             - trova uno slot libero nell'array di client
             - registra il nuovo client e crea un thread dedicato
+        il server rimane in attesa di connessioni finche' non viene inviato un segnale di SIGINT (CTRL+C)
+
+    si assume che:
+        - il server sia stato inizializzato correttamente
+        - il socket sia stato creato e messo in ascolto correttamente
 */
 int server_run()
 {
@@ -1371,6 +1421,10 @@ int server_run()
             + chiude il socket in ascolto
             + attende la termionazione del thread orch.
             + libera risorse
+
+    si assume che:
+        - il server sia stato inizializzato correttamente, e sia in esecuzione
+        - tutte le risorse siano state allocate correttamente
 */
 void server_shutdown()
 {
@@ -1456,6 +1510,9 @@ void server_shutdown()
 /*
    server_set_name:
    Imposta il nome del server. Viene utilizzato per i messaggi di log.
+   si assume che:
+   - il nome sia una stringa valida
+   - la lunghezza del nome sia inferiore a 128 caratteri
 */
 void server_set_name(const char *name)
 {

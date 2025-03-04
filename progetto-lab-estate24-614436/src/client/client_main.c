@@ -8,6 +8,15 @@ client_main.c
             • paroliere_cl `e il nome dell’eseguibile;
             • nome_server `e il nome del server al quale collegarsi;
             • porta_server `e il numero della porta alla quale collegarsi;
+
+    si assume:
+        • il server `e in ascolto sulla porta specificata;
+        • il server `e in esecuzione e pronto a ricevere connessioni;
+        • il server `e in grado di gestire le richieste del client.
+        • argv deve essere un arraay valido di stringhe, terminato da '\0'
+        • argv[0] deve contenere il nome dell'eseguibile
+        • argv[1] deve contenere il nome del server, una stringa non NULL
+        • argv[2] deve contenere la porta del server, un numero valido (convertibile in intero)
 */
 
 #include "client.h"

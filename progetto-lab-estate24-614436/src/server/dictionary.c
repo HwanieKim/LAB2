@@ -125,11 +125,7 @@ void trie_free(trie_node *node)
 }
 
 // ======================= caricamento dizionario =======================
-/*
-    load_dictionary_trie:
-        carica un file di dizionario e inserisce le parole nel trie
-        ritorna il puntatore al nodo radice del trie;
-*/
+
 void *load_dictionary_trie(const char *filename)
 {
     if (filename == NULL)
